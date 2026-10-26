@@ -20,8 +20,11 @@ WITH_AMD_OPENCL="${WITH_AMD_OPENCL:-1}"
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
-OUT_DIR="$HERE/out"
-IMG="$OUT_DIR/whispermining-$VERSION.img"
+OUT_DIR="${OUT_DIR:-$HERE/out}"
+# WORK_DIR: imajın derlendiği yer. RAM'de (tmpfs) derlemek için build-wsl.sh bunu ayarlar.
+WORK_DIR="${WORK_DIR:-$OUT_DIR}"
+IMG="$WORK_DIR/whispermining-$VERSION.img"
+FINAL="$OUT_DIR/whispermining-$VERSION.img.xz"
 MNT="$(mktemp -d /tmp/wmroot.XXXX)"
 LOOP=""
 
@@ -43,8 +46,8 @@ apt-get update -qq
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq debootstrap dosfstools e2fsprogs fdisk xz-utils rsync >/dev/null
 
 log "Boş imaj ($IMG_SIZE) ve bölümler"
-mkdir -p "$OUT_DIR"
-rm -f "$IMG" "$IMG.xz"
+mkdir -p "$OUT_DIR" "$WORK_DIR"
+rm -f "$IMG" "$FINAL"
 truncate -s "$IMG_SIZE" "$IMG"
 sfdisk --quiet "$IMG" <<EOF
 label: dos
@@ -171,7 +174,8 @@ LOOP=""
 set -e
 
 log "Sıkıştırma"
-xz -T0 -6 "$IMG"
-( cd "$OUT_DIR" && sha256sum "$(basename "$IMG").xz" > "$(basename "$IMG").xz.sha256" )
-ls -lh "$OUT_DIR"
-cat "$OUT_DIR/$(basename "$IMG").xz.sha256"
+xz -T0 -6 -c "$IMG" > "$FINAL"
+rm -f "$IMG"
+( cd "$OUT_DIR" && sha256sum "$(basename "$FINAL")" > "$(basename "$FINAL").sha256" )
+ls -lh "$FINAL"
+cat "$FINAL.sha256"
