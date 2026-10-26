@@ -136,11 +136,12 @@ in_chroot systemctl disable ssh.service >/dev/null 2>&1 || true
 in_chroot passwd -l root >/dev/null
 
 log "WhisperMining dosyaları ve agent"
-rsync -a "$HERE/rootfs/" "$MNT/"
+# Sahiplik root, izinler sabit: depodaki (CI kullanıcısının) sahiplik/izinler imaja taşınmasın
+rsync -rl --chown=root:root --chmod=D755,F644 "$HERE/rootfs/" "$MNT/"
 chmod 755 "$MNT/usr/local/sbin/"wmining-*
 AGENT_VERSION="$(python3 -c "import re;print(re.search(r'VERSION = \"(.+?)\"', open('$REPO/agent/whisperagent/__init__.py').read()).group(1))")"
 mkdir -p "$MNT/opt/wmining/agent/releases/$AGENT_VERSION" "$MNT/var/lib/wmining"
-rsync -a --exclude '__pycache__' "$REPO/agent/whisperagent" "$MNT/opt/wmining/agent/releases/$AGENT_VERSION/"
+rsync -rl --chown=root:root --chmod=D755,F644 --exclude '__pycache__' "$REPO/agent/whisperagent" "$MNT/opt/wmining/agent/releases/$AGENT_VERSION/"
 install -m 755 "$REPO/agent/start.sh" "$MNT/opt/wmining/agent/start.sh"
 ln -sfn "/opt/wmining/agent/releases/$AGENT_VERSION" "$MNT/opt/wmining/agent/current"
 in_chroot systemctl enable wmining-firstboot.service wmining-agent.service wmining-xorg.service systemd-networkd.service >/dev/null
