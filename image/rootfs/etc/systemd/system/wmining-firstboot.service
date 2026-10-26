@@ -1,7 +1,9 @@
 [Unit]
+# rig.conf WMINING bölümünde: önce o bağlansın (bağlanamazsa da açılış sürsün)
+Wants=wmining.mount
 Description=WhisperMining ilk açılış hazırlığı (disk büyütme, makine kimliği)
 ConditionPathExists=!/var/lib/wmining/firstboot-done
-After=local-fs.target
+After=local-fs.target wmining.mount
 Before=wmining-agent.service network-online.target
 
 [Service]

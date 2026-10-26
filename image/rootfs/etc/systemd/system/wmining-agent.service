@@ -1,7 +1,9 @@
 [Unit]
+# rig.conf WMINING bölümünde: önce o bağlansın (bağlanamazsa da açılış sürsün)
+Wants=wmining.mount
 Description=WhisperMining agent
 Wants=network-online.target
-After=network-online.target wmining-firstboot.service wmining-xorg.service
+After=network-online.target wmining.mount wmining-firstboot.service wmining-xorg.service
 StartLimitIntervalSec=0
 
 [Service]

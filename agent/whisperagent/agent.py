@@ -326,7 +326,37 @@ class Agent:
         except Exception as e:
             log.warning("Güncelleme kontrolü başarısız: %s", e)
 
+    def wait_conf_partition(self):
+        """WMINING bölümü bağlanmadan rig.conf okunmaz; okunmadan kayıt olmak yanlış rig yaratır.
+        Yavaş USB bellekler açılışta geç görünebilir: bağlanana kadar bekle, arada bağlamayı dene."""
+        waited = 0
+        while not config.conf_partition_ready():
+            if waited % 15 == 0:
+                subprocess.run(["mount", config.FAT_MOUNT], capture_output=True, check=False)
+            if waited >= 30:
+                self.error = "WMINING bölümü bulunamadı: flash bellek düzgün yazılmamış ya da bozuk olabilir."
+                self.view["connection"] = "WMINING bölümü bekleniyor"
+                self.view["error"] = self.error
+                display.show(self.view)
+                if waited % 60 == 0:
+                    log.error(self.error)
+            time.sleep(1)
+            waited += 1
+        if waited:
+            log.info("WMINING bölümü %d sn sonra hazır", waited)
+            self.error = None
+        self.conf = config.read_conf()
+        self.server = (self.conf.get("SERVER_URL") or config.DEFAULT_SERVER_URL).rstrip("/")
+        try:
+            self.api = Api(self.server)
+        except ValueError as e:  # elle bozulmuş SERVER_URL agent'ı sürekli çökertmesin
+            log.error("rig.conf SERVER_URL geçersiz (%s), varsayılan panel kullanılıyor", e)
+            self.server = config.DEFAULT_SERVER_URL
+            self.api = Api(self.server)
+        self.view["server"] = self.server
+
     def run(self):
+        self.wait_conf_partition()
         backoff = 5
         while True:
             try:

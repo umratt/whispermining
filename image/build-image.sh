@@ -81,7 +81,7 @@ log "Çekirdek, önyükleyici ve araçlar"
 in_chroot apt-get update -qq
 in_chroot apt-get install -y -qq --no-install-recommends \
   linux-generic grub-pc-bin grub-efi-amd64-bin grub2-common initramfs-tools \
-  python3 pciutils curl ca-certificates cloud-guest-utils gdisk dosfstools e2fsprogs \
+  python3 pciutils curl ca-certificates cloud-guest-utils fdisk gdisk dosfstools e2fsprogs \
   netplan.io iproute2 iputils-ping openssh-server sudo kbd console-setup locales tzdata less nano >/dev/null
 
 log "NVIDIA $NVIDIA_BRANCH sürücüsü (Ubuntu'nun hazır derlenmiş modülleriyle; DKMS yok)"
@@ -108,7 +108,7 @@ echo "wmining" > "$MNT/etc/hostname"
 printf '127.0.0.1 localhost\n127.0.1.1 wmining\n' > "$MNT/etc/hosts"
 cat > "$MNT/etc/fstab" <<'EOF'
 LABEL=wmroot   /          ext4   noatime,commit=600,errors=remount-ro  0 1
-LABEL=WMINING  /wmining   vfat   noatime,umask=0077,nofail,x-systemd.device-timeout=10s  0 2
+LABEL=WMINING  /wmining   vfat   noatime,umask=0077,nofail,x-systemd.device-timeout=90s  0 2
 tmpfs          /var/log   tmpfs  size=64m,mode=0755  0 0
 tmpfs          /tmp       tmpfs  size=256m,mode=1777  0 0
 EOF
@@ -157,6 +157,8 @@ rsync -rl --chown=root:root --chmod=D755,F644 --exclude '__pycache__' "$REPO/age
 install -m 755 "$REPO/agent/start.sh" "$MNT/opt/wmining/agent/start.sh"
 ln -sfn "/opt/wmining/agent/releases/$AGENT_VERSION" "$MNT/opt/wmining/agent/current"
 in_chroot systemctl enable wmining-firstboot.service wmining-agent.service wmining-xorg.service systemd-networkd.service >/dev/null
+# NVIDIA kalıcılık servisi: güç limiti gibi ayarlar kart boştayken sıfırlanmasın
+[ -e "$MNT/lib/systemd/system/nvidia-persistenced.service" ] && in_chroot systemctl enable nvidia-persistenced.service >/dev/null
 # tty1 agent'ın durum ekranı; giriş ekranı tty2'de
 in_chroot systemctl mask getty@tty1.service >/dev/null
 echo "WhisperMining OS $VERSION (agent $AGENT_VERSION, NVIDIA $NVIDIA_BRANCH)" > "$MNT/etc/wmining-release"

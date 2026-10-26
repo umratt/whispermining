@@ -21,6 +21,16 @@ def conf_path():
     return DEFAULT_CONF_PATHS[0]
 
 
+FAT_MOUNT = "/wmining"  # imajda fstab'te LABEL=WMINING buraya bağlanır
+
+
+def conf_partition_ready():
+    """rig.conf'un durduğu FAT bölümü bağlı mı? WM_CONF ile başka yer verilmişse (geliştirme) her zaman hazır."""
+    if os.environ.get("WM_CONF") or not os.path.isdir(FAT_MOUNT):
+        return True
+    return os.path.ismount(FAT_MOUNT)
+
+
 def parse_conf(text):
     """KEY=VALUE satırları. Windows'ta düzenlenmiş olabilir: BOM, CRLF, tırnak."""
     out = {}
