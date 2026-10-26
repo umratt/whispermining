@@ -14,9 +14,12 @@ IMG_SIZE="${IMG_SIZE:-7G}"
 SUITE=jammy
 MIRROR="${MIRROR:-http://archive.ubuntu.com/ubuntu}"
 NVIDIA_BRANCH="${NVIDIA_BRANCH:-535}"     # GTX 10xx (P106 dahil) → RTX 40xx
-# RX 470/480/570/580 (Polaris) için eski OpenCL: yeni ROCm Polaris'i desteklemiyor
+# RX 470/480/570/580 (Polaris) için eski (legacy) OpenCL: AMD 22.x depolarını ve sürücü paketlerini
+# kaldırdı (Ekim 2026'da repo.radeon.com'da en eski 23.20, o da Polaris legacy OpenCL içermiyor).
+# Bu yüzden varsayılan kapalı; amdgpu çekirdek sürücüsü (sensör, fan, OC) yine imajda.
+# Güvenilir bir amdgpu-install 22.20 paketi bulunursa: WITH_AMD_OPENCL=1 AMDGPU_INSTALL_URL=...
 AMDGPU_INSTALL_URL="${AMDGPU_INSTALL_URL:-https://repo.radeon.com/amdgpu-install/22.20.5/ubuntu/jammy/amdgpu-install_22.20.50205-1_all.deb}"
-WITH_AMD_OPENCL="${WITH_AMD_OPENCL:-1}"
+WITH_AMD_OPENCL="${WITH_AMD_OPENCL:-0}"
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
@@ -36,7 +39,7 @@ cleanup() {
   [ -n "$LOOP" ] && losetup -d "$LOOP"
   rmdir "$MNT" 2>/dev/null
 }
-trap cleanup EXIT
+trap 'rc=$?; cleanup; exit $rc' EXIT   # hata kodu kaybolmasın
 
 [ "$(id -u)" -eq 0 ] || { echo "root olarak çalıştırın (sudo)"; exit 1; }
 grep -q 'VERSION_ID="22.04"' /etc/os-release || echo "UYARI: Ubuntu 22.04 dışında denenmedi"
@@ -89,9 +92,15 @@ in_chroot apt-get install -y -qq --no-install-recommends \
 if [ "$WITH_AMD_OPENCL" = "1" ]; then
   log "AMD OpenCL (Polaris için legacy)"
   curl -fsSL -o "$MNT/tmp/amdgpu-install.deb" "$AMDGPU_INSTALL_URL"
+  # Sadece depo tanımlarını almak için; amdgpu-install aracını çalıştırmıyoruz (legacy + DKMS'siz desteklemiyor).
   in_chroot apt-get install -y -qq /tmp/amdgpu-install.deb >/dev/null
-  in_chroot amdgpu-install -y --usecase=opencl --opencl=legacy --no-dkms --accept-eula >/dev/null
   rm -f "$MNT/tmp/amdgpu-install.deb"
+  ls "$MNT/etc/apt/sources.list.d/"
+  in_chroot apt-get update -qq
+  # Legacy OpenCL kullanıcı alanı kütüphanesi Ubuntu'nun kendi amdgpu çekirdek sürücüsüyle çalışır (DKMS gerekmez)
+  in_chroot apt-get install -y -qq --no-install-recommends opencl-legacy-amdgpu-pro-icd ocl-icd-libopencl1 clinfo >/dev/null
+  in_chroot dpkg -l | grep -E "opencl-legacy|amdgpu-dkms" || true
+  if in_chroot dpkg-query -W -f='${Status}' amdgpu-dkms 2>/dev/null | grep -q "ok installed"; then echo "HATA: amdgpu-dkms kuruldu (istenmiyordu)"; exit 1; fi
 fi
 
 log "Sistem ayarları"

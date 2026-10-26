@@ -6,8 +6,8 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 RAM_DIR=/mnt/wmbuild
 mkdir -p "$RAM_DIR"
-mountpoint -q "$RAM_DIR" || mount -t tmpfs -o size=12G tmpfs "$RAM_DIR"
-trap 'umount -l "$RAM_DIR" 2>/dev/null || true' EXIT
+mountpoint -q "$RAM_DIR" || mount -t tmpfs -o size=9G tmpfs "$RAM_DIR"
+trap 'rc=$?; umount -l "$RAM_DIR" 2>/dev/null; exit $rc' EXIT   # hata kodu kaybolmasın
 # Windows klasöründen çalışırken satır sonu / izin sorunları olmasın diye betikleri RAM'e kopyala
 rm -rf "$RAM_DIR/src" && mkdir -p "$RAM_DIR/src"
 cp -r "$HERE/../agent" "$HERE/../image" "$RAM_DIR/src/"

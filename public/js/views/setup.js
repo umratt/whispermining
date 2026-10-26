@@ -108,7 +108,9 @@ export async function setupView(el) {
             <ul><li>Genelde OC fazla gelmiştir: <a href="overclock">OC profilinde</a> bellek offset'ini 100–200 MHz düşürün.</li>
               <li>Güç kaynağı yetersiz olabilir; toplam güç, PSU kapasitesinin %80'ini geçmemeli.</li></ul></details>
           <details><summary>RX 580 (AMD) kartlar hakkında</summary>
-            <ul><li>İmaj, Polaris kartlar için uygun OpenCL sürücüsüyle gelir; ayrıca sürücü kurmanız gerekmez.</li>
+            <ul><li>İmajın şu anki sürümü RX 470/480/570/580 (Polaris) kartlarda <strong>madencilik yapamaz</strong>: bu kartların
+                ihtiyaç duyduğu eski AMD OpenCL sürücüsünü AMD kaldırdı. Kartlar panelde görünür; sıcaklık, fan ve OC çalışır.</li>
+              <li>Polaris için çözüm üzerinde çalışılıyor. Şimdilik bu kartları NVIDIA'lı rig'lerden ayrı tutabilirsiniz.</li>
               <li>AMD kartlar için TeamRedMiner ya da lolMiner seçin (T-Rex sadece NVIDIA'da çalışır).</li></ul></details>
           <details><summary>Flash belleği başka rig'de kullanmak istiyorum</summary>
             <ul><li>Eski rig'i panelden kaldırın ya da yeni rig için ayrı rig.conf indirip WMINING bölümündeki dosyanın üzerine yazın.</li></ul></details>
