@@ -47,7 +47,12 @@ def download_miner(spec, miner, cache_dir, on_progress=None):
     dest = os.path.join(cache_dir, spec.api_type, miner["version"])
     marker = os.path.join(dest, ".ok")
     if os.path.exists(marker) and open(marker).read().strip() == sha:
-        return spec.find_binary(dest)
+        try:
+            return spec.find_binary(dest)
+        except FileNotFoundError:
+            # İşaret var ama program yok (flash bozulması, silinme): baştan indir
+            log.warning("%s önbellekte eksik, yeniden indiriliyor", spec.name)
+            os.remove(marker)
 
     os.makedirs(cache_dir, exist_ok=True)
     tmp = os.path.join(cache_dir, f".{spec.api_type}-{miner['version']}.download")

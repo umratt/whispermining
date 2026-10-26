@@ -4,14 +4,17 @@ const crypto = require('crypto');
 const { get, all, run, tx, now } = require('../db');
 const config = require('../config');
 const sec = require('../security');
-const { buildAgentConfig } = require('../services/rigs');
+const rigsSvc = require('../services/rigs');
+const { buildAgentConfig } = rigsSvc;
 const { ingestStats } = require('../services/stats');
 
 const router = express.Router();
 router.use(express.json({ limit: '64kb' }));
 
 const str = (v, max = 200) => (v === undefined || v === null ? null : String(v).slice(0, max));
-const COMMAND_TYPES = new Set(['miner_start', 'miner_stop', 'miner_restart', 'reboot', 'apply_oc']);
+const COMMAND_TYPES = new Set(['miner_start', 'miner_stop', 'miner_restart', 'reboot', 'apply_oc', 'oc_tune', 'oc_tune_cancel']);
+// Otomatik OC uzun sürer: rig'e gönderildikten sonra bu kadar süre sonuç beklenir
+const LONG_COMMANDS = { oc_tune: 4 * 3600 };
 
 function newPairingCode() {
   for (let i = 0; i < 10; i++) {
@@ -140,6 +143,12 @@ router.put('/hardware', (req, res) => {
 // 4) Periyodik istatistik
 router.post('/stats', requirePaired, (req, res) => {
   const { unknownGpus } = ingestStats(req.rig, req.body || {});
+  const tune = (req.body || {}).tune;
+  if (tune && typeof tune === 'object') {
+    const prev = rigsSvc.parseJson(req.rig.tune_state, {}) || {};
+    const json = JSON.stringify({ ...tune, result_profile_id: prev.result_profile_id, updated_at: now() }).slice(0, 4000);
+    run('UPDATE rigs SET tune_state = ? WHERE id = ?', json, req.rig.id);
+  }
   res.json({ ok: true, hardware_required: unknownGpus > 0, ...syncHints(req.rig) });
 });
 
@@ -163,12 +172,25 @@ router.get('/commands', requirePaired, (req, res) => {
 // 7) Komut sonucu
 router.post('/commands/:id/result', requirePaired, (req, res) => {
   const b = req.body || {};
-  const cmd = get('SELECT id, status FROM commands WHERE id = ? AND rig_id = ?', Number(req.params.id), req.rig.id);
+  const cmd = get('SELECT id, status, type, payload FROM commands WHERE id = ? AND rig_id = ?', Number(req.params.id), req.rig.id);
   if (!cmd) return res.status(404).json({ error: 'command_not_found' });
   if (!['queued', 'sent'].includes(cmd.status)) return res.status(409).json({ error: 'already_finished' });
   const status = b.status === 'done' ? 'done' : 'failed';
+  let output = str(b.output, 4000);
+  if (cmd.type === 'oc_tune' && status === 'done') {
+    // Agent sonucu JSON olarak verir: önerilen değerler yeni bir OC profili olarak kaydedilir (atama kullanıcıya kalır)
+    const r = rigsSvc.parseJson(b.output, null);
+    const profileId = r && req.rig.owner_id ? rigsSvc.saveTunedProfile(req.rig.owner_id, r) : null;
+    const prev = rigsSvc.parseJson(req.rig.tune_state, {}) || {};
+    run('UPDATE rigs SET tune_state = ? WHERE id = ?',
+      JSON.stringify({ ...prev, status: profileId ? 'done' : 'failed', result: r, result_profile_id: profileId, updated_at: now() }).slice(0, 4000), req.rig.id);
+    if (r && r.summary) output = str(r.summary, 4000);
+  } else if (cmd.type === 'oc_tune') {
+    const prev = rigsSvc.parseJson(req.rig.tune_state, {}) || {};
+    run('UPDATE rigs SET tune_state = ? WHERE id = ?', JSON.stringify({ ...prev, status: 'failed', message: output, updated_at: now() }).slice(0, 4000), req.rig.id);
+  }
   run('UPDATE commands SET status = ?, exit_code = ?, result = ?, finished_at = ? WHERE id = ?',
-    status, Number.isInteger(b.exit_code) ? b.exit_code : null, str(b.output, 4000), now(), cmd.id);
+    status, Number.isInteger(b.exit_code) ? b.exit_code : null, output, now(), cmd.id);
   res.json({ ok: true });
 });
 
@@ -191,4 +213,4 @@ function compareVersions(a, b) {
   return 0;
 }
 
-module.exports = { router, COMMAND_TYPES, compareVersions };
+module.exports = { router, COMMAND_TYPES, LONG_COMMANDS, compareVersions };

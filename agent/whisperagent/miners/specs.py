@@ -149,7 +149,206 @@ class TeamRedMiner(Spec):
         return out
 
 
-SPECS = {s.api_type: s for s in (TRex(), LolMiner(), TeamRedMiner())}
+def _match_bus(value, gpus):
+    """Miner'ın verdiği PCI bilgisini bizim bus_id'mize çevir: 1 (onluk bus no), "01:00.0", "0000:01:00.0", "1:0"."""
+    if value is None or value == "":
+        return None
+    try:
+        if isinstance(value, (int, float)):
+            busn = int(value)
+        else:
+            s = str(value).strip()
+            if s.isdigit():
+                busn = int(s)
+            else:
+                nb = norm_bus(s)
+                return next((g["bus_id"] for g in gpus if g["bus_id"] == nb), None) or \
+                    next((g["bus_id"] for g in gpus if _bus_key(g["bus_id"]) == _bus_key(nb)), None)
+    except (ValueError, IndexError):
+        return None
+    return next((g["bus_id"] for g in gpus if _bus_key(g["bus_id"]) == busn), None)
+
+
+def _num(v):
+    """Sayı ya da {algo: sayı} sözlüğü → sayı (ilk algoritma)."""
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, dict):
+        for x in v.values():
+            n = _num(x)
+            if n is not None:
+                return n
+    if isinstance(v, list) and v:
+        return _num(v[0])
+    return None
+
+
+HASH_KEYS = ("hashrate", "hash_rate", "speed", "hr", "hashrate_now", "current_hashrate")
+BUS_KEYS = ("pci_bus_id", "pcie_bus_id", "pci_bus", "pcie_bus", "bus_id", "busid", "pci_id", "pci", "bus")
+ACC_KEYS = ("accepted", "accepted_shares", "valid_solutions", "valid_shares", "shares_accepted")
+REJ_KEYS = ("rejected", "rejected_shares", "rejected_solutions", "shares_rejected", "invalid")
+
+
+def _pick(d, keys):
+    low = {str(k).lower(): v for k, v in d.items()}
+    for k in keys:
+        if k in low:
+            return low[k]
+    for k, v in low.items():  # iç içe: {"shares": {"accepted": 5}}
+        if isinstance(v, dict):
+            r = _pick(v, keys)
+            if r is not None:
+                return r
+    return None
+
+
+def generic_devices(data, gpus):
+    """Belgesi eksik miner'lar için: JSON içinde PCI + hashrate alanı olan cihaz listesini bulur.
+    HiveOS biçimini de (hs, hs_units, bus_numbers, ar) tanır."""
+    out = {}
+    if isinstance(data, dict) and isinstance(data.get("hs"), list) and isinstance(data.get("bus_numbers"), list):
+        mult = {"hs": 1, "khs": 1e3, "mhs": 1e6, "ghs": 1e9}.get(str(data.get("hs_units", "khs")).lower(), 1e3)
+        for i, h in enumerate(data["hs"]):
+            bus = _match_bus(data["bus_numbers"][i] if i < len(data["bus_numbers"]) else None, gpus)
+            if bus and _num(h) is not None:
+                out[bus] = {"hashrate": _num(h) * mult, "accepted": None, "rejected": None}
+        return out
+
+    def walk(node):
+        if isinstance(node, list) and node and all(isinstance(x, dict) for x in node):
+            found = {}
+            for d in node:
+                bus = _match_bus(_pick(d, BUS_KEYS), gpus)
+                h = _num(_pick(d, HASH_KEYS))
+                if bus and h is not None:
+                    found[bus] = {"hashrate": h, "accepted": _num(_pick(d, ACC_KEYS)), "rejected": _num(_pick(d, REJ_KEYS))}
+            if found:
+                return found
+        if isinstance(node, dict):
+            for v in node.values():
+                r = walk(v)
+                if r:
+                    return r
+        if isinstance(node, list):
+            for v in node:
+                r = walk(v)
+                if r:
+                    return r
+        return None
+    return walk(data) or out
+
+
+class GMiner(Spec):
+    name, api_type, binary, port = "GMiner", "gminer", "miner", 4069
+    vendors = ("nvidia", "amd")
+    algos = {"etchash": "etchash", "kawpow": "kawpow", "autolykos2": "autolykos2", "octopus": "octopus",
+             "firopow": "firopow", "beamhash": "beamhashIII", "equihash125_4": "equihash125_4"}
+
+    def args(self, fs, miner, gpus):
+        a = ["--algo", self.algo(fs["algo"])]
+        for pool in fs["pools"]:
+            scheme, _, hostport = pool.partition("://")
+            host, _, port = (hostport or pool).rpartition(":")
+            a += ["--server", host, "--port", port, "--user", self.user(fs), "--pass", fs.get("pool_pass") or "x"]
+            if "ssl" in scheme or "tls" in scheme:
+                a += ["--ssl", "1"]
+        vendors = {g["vendor"] for g in gpus}
+        a += ["--cuda", "1" if "nvidia" in vendors else "0", "--opencl", "1" if "amd" in vendors else "0"]
+        a += ["--api", str(self.port), "--pec", "0", "--watchdog", "0"]
+        return a + self.extra(miner)
+
+    def stats(self, gpus):
+        data = _http_json(self.port, "/stat")
+        out = {}
+        for d in data.get("devices", []):
+            bus = _match_bus(d.get("bus_id"), gpus)
+            if bus:
+                out[bus] = {"hashrate": d.get("speed"), "accepted": d.get("accepted_shares"), "rejected": d.get("rejected_shares")}
+        return out
+
+
+class SRBMiner(Spec):
+    name, api_type, binary, port = "SRBMiner-Multi", "srbminer", "SRBMiner-MULTI", 21550
+    vendors = ("nvidia", "amd")
+    algos = {"etchash": "etchash", "kawpow": "kawpow", "autolykos2": "autolykos2", "firopow": "firopow",
+             "alephium": "blake3_alephium", "kaspa": "kheavyhash"}
+
+    def args(self, fs, miner, gpus):
+        pools = []
+        for pool in fs["pools"]:
+            scheme, _, hostport = pool.partition("://")
+            pools.append(("stratum+ssl://" if ("ssl" in scheme or "tls" in scheme) else "") + (hostport or pool))
+        a = ["--algorithm", self.algo(fs["algo"]), "--pool", "!".join(pools), "--wallet", self.user(fs),
+             "--password", fs.get("pool_pass") or "x", "--disable-cpu", "--api-enable", "--api-port", str(self.port)]
+        vendors = {g["vendor"] for g in gpus}
+        if "amd" not in vendors:
+            a.append("--disable-gpu-amd")
+        if "nvidia" not in vendors:
+            a.append("--disable-gpu-nvidia")
+        return a + self.extra(miner)
+
+    def stats(self, gpus):
+        data = _http_json(self.port, "/")
+        algo = (data.get("algorithms") or [{}])[0]
+        per_gpu = (algo.get("hashrate") or {}).get("gpu") or {}
+        out = {}
+        for dev in data.get("gpu_devices", []):
+            bus = _match_bus(dev.get("bus_id"), gpus)
+            h = per_gpu.get(f"gpu{dev.get('device_id')}")
+            if bus and h is not None:
+                out[bus] = {"hashrate": h, "accepted": None, "rejected": None}  # SRB share'leri sadece toplam verir
+        return out
+
+
+class Rigel(Spec):
+    name, api_type, binary, port = "Rigel", "rigel", "rigel", 4070
+    vendors = ("nvidia",)
+    algos = {"etchash": "etchash", "kawpow": "kawpow", "autolykos2": "autolykos2", "octopus": "octopus", "alephium": "alephium"}
+
+    def args(self, fs, miner, gpus):
+        a = ["-a", self.algo(fs["algo"])]
+        for pool in fs["pools"]:
+            a += ["-o", pool]
+        a += ["-u", fs["wallet"], "-w", fs.get("worker") or "rig", "-p", fs.get("pool_pass") or "x",
+              "--api-bind", f"{LOCAL}:{self.port}"]
+        return a + self.extra(miner)
+
+    def stats(self, gpus):
+        return generic_devices(_http_json(self.port, "/"), gpus)  # alan adları resmî olarak belgelenmemiş
+
+
+class BzMiner(Spec):
+    name, api_type, binary, port = "BzMiner", "bzminer", "bzminer", 4014
+    vendors = ("nvidia", "amd")
+    algos = {"etchash": "etchash", "kawpow": "kawpow", "autolykos2": "ergo", "alephium": "alph", "octopus": "olhash"}
+
+    def args(self, fs, miner, gpus):
+        a = ["-a", self.algo(fs["algo"])]
+        for pool in fs["pools"]:
+            a += ["-p", pool]
+        a += ["-w", fs["wallet"], "--pass", fs.get("pool_pass") or "x",
+              "--set", f"http_address={LOCAL}", "--set", f"http_port={self.port}"]
+        if fs.get("worker"):
+            a += ["--worker", fs["worker"]]
+        vendors = {g["vendor"] for g in gpus}
+        if "amd" not in vendors:
+            a += ["--amd", "0"]
+        if "nvidia" not in vendors:
+            a += ["--nvidia", "0"]
+        return a + self.extra(miner)
+
+    def stats(self, gpus):
+        for path in ("/hive_status", "/api/snapshot", "/status"):
+            try:
+                r = generic_devices(_http_json(self.port, path), gpus)
+                if r:
+                    return r
+            except Exception:
+                continue
+        return {}
+
+
+SPECS = {s.api_type: s for s in (TRex(), LolMiner(), TeamRedMiner(), GMiner(), SRBMiner(), Rigel(), BzMiner())}
 
 
 def normalize_bus(bus):

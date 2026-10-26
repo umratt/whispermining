@@ -129,8 +129,11 @@ function runChecks() {
     }
   }
   // Süresi geçen komutlar
-  run(`UPDATE commands SET status = 'expired', finished_at = ? WHERE status IN ('queued','sent') AND created_at < ?`,
-    now(), now() - config.commandTtlSec);
+  // Rig'e hiç ulaşmayan komutlar 10 dk sonra; rig'in aldığı uzun komutlar (otomatik OC) 4 saat sonra düşer
+  run(`UPDATE commands SET status = 'expired', finished_at = ? WHERE created_at < ?
+       AND (status = 'queued' OR (status = 'sent' AND type != 'oc_tune'))`, now(), now() - config.commandTtlSec);
+  run(`UPDATE commands SET status = 'expired', finished_at = ? WHERE status = 'sent' AND type = 'oc_tune' AND created_at < ?`,
+    now(), now() - 4 * 3600);
 }
 
 module.exports = { runChecks, TYPE_LABELS };

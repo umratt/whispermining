@@ -3,6 +3,31 @@ const { get, all, run } = require('../db');
 
 const parseJson = (s, fallback) => { try { return JSON.parse(s); } catch { return fallback; } };
 
+// OC değerlerinin izin verilen aralıkları (panel formu, otomatik OC ve agent aynı sınırları kullanır)
+const OC_FIELDS = {
+  nvidia: { core_offset: [-1000, 1000], mem_offset: [-2000, 3000], power_limit_w: [50, 450], fan_pct: [0, 100] },
+  amd: { core_clock: [300, 2000], mem_clock: [300, 2500], core_mv: [700, 1200], mem_mv: [700, 1100], fan_pct: [0, 100] },
+};
+
+// Otomatik OC sonucunu kullanıcının profillerine ekler. Rig'e ATANMAZ: kullanıcı panelden "Uygula" der.
+function saveTunedProfile(userId, r) {
+  const vendor = r.vendor === 'amd' ? 'amd' : r.vendor === 'nvidia' ? 'nvidia' : null;
+  if (!vendor || !r.params || typeof r.params !== 'object') return null;
+  const params = {};
+  for (const [k, [min, max]] of Object.entries(OC_FIELDS[vendor])) {
+    const v = Number(r.params[k]);
+    if (r.params[k] !== undefined && r.params[k] !== null && Number.isFinite(v)) params[k] = Math.min(max, Math.max(min, Math.round(v)));
+  }
+  if (!Object.keys(params).length) return null;
+  const short = String(r.model || '').replace(/^(NVIDIA|AMD)\s+(GeForce\s+|Radeon\s+)?/i, '').slice(0, 20);
+  const d = new Date();
+  const name = `Oto · ${short} · ${String(r.algo || '').slice(0, 12)} · ${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}`;
+  const t = Math.floor(Date.now() / 1000);
+  const res = run('INSERT INTO oc_profiles (user_id, name, vendor, params, created_at, updated_at) VALUES (?,?,?,?,?,?)',
+    userId, name.slice(0, 40), vendor, JSON.stringify(params), t, t);
+  return Number(res.lastInsertRowid);
+}
+
 // Sahibin rig'ini getir; başkasınınsa null döner (her panel işlemi buradan geçer)
 function ownedRig(userId, rigId) {
   return get('SELECT * FROM rigs WHERE id = ? AND owner_id = ?', String(rigId), userId) || null;
@@ -110,6 +135,7 @@ function rigConfText(rig, secret, publicUrl) {
 }
 
 module.exports = {
+  OC_FIELDS, saveTunedProfile,
   rigConfText,
   parseJson, ownedRig, bumpConfig, bumpConfigForFlightSheet, bumpConfigForWallet, bumpConfigForOcProfile,
   flightSheetMiners, buildAgentConfig, effectiveOc,

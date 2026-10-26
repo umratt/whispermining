@@ -76,7 +76,7 @@ export const MINER_STATUS = {
   error: ['Hata', 'bad'], unknown: ['Bilinmiyor', ''], offline: ['Çevrimdışı', 'bad'],
 };
 export const COMMAND_LABELS = {
-  miner_start: 'Miner başlat', miner_stop: 'Miner durdur', miner_restart: 'Miner yeniden başlat', reboot: 'Rig yeniden başlat', apply_oc: 'OC uygula',
+  miner_start: 'Miner başlat', miner_stop: 'Miner durdur', miner_restart: 'Miner yeniden başlat', reboot: 'Rig yeniden başlat', apply_oc: 'OC uygula', oc_tune: 'Otomatik OC', oc_tune_cancel: 'Otomatik OC iptal',
 };
 export const COMMAND_STATUS = { queued: ['Sırada', 'warn'], sent: ['Gönderildi', 'warn'], done: ['Tamam', 'ok'], failed: ['Başarısız', 'bad'], expired: ['Zaman aşımı', ''] };
 export const ALERT_LABELS = { offline: 'Rig çevrimdışı', gpu_lost: 'Kart kayboldu', high_temp: 'Sıcaklık yüksek', hashrate_drop: 'Hashrate düştü', hw_changed: 'Donanım değişti', new_gpu: 'Yeni kart algılandı', no_miner: 'Kart boşta' };

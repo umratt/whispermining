@@ -256,6 +256,10 @@ const MIGRATIONS = [
   `
   ALTER TABLE rigs ADD COLUMN miner_error TEXT;
   `,
+  // v6: otomatik OC ayarının ilerlemesi ve sonucu (agent istatistikle gönderir)
+  `
+  ALTER TABLE rigs ADD COLUMN tune_state TEXT;
+  `,
 ];
 
 function migrate() {

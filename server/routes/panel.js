@@ -178,7 +178,7 @@ router.get('/rigs/:id', (req, res) => {
     rig: { ...summary, hostname: r.hostname, os_info: r.os_info, cpu_model: r.cpu_model, ram_total_mb: r.ram_total_mb,
       ram_used_mb: r.ram_used_mb, cpu_load: r.cpu_load, miner_uptime_sec: r.miner_uptime_sec, paired_at: r.paired_at,
       flight_sheet_id: r.flight_sheet_id, config_version: r.config_version, hw_changed_at: r.hw_changed_at,
-      miner_error: summary.online ? r.miner_error : null },
+      miner_error: summary.online ? r.miner_error : null, tune: rigsSvc.parseJson(r.tune_state, null) },
     gpus, models, commands, alerts,
   });
 });
@@ -259,12 +259,62 @@ router.post('/rigs/:id/commands', (req, res) => {
   const r = rigsSvc.ownedRig(req.user.id, req.params.id);
   if (!r) return bad(res, 'Rig bulunamadı.', 404);
   const type = String(req.body.type || '');
-  if (!COMMAND_TYPES.has(type)) return bad(res, 'Geçersiz komut.');
+  if (!COMMAND_TYPES.has(type) || type.startsWith('oc_tune')) return bad(res, 'Geçersiz komut.'); // otomatik OC kendi uç noktasından
   const dup = get(`SELECT id FROM commands WHERE rig_id = ? AND type = ? AND status IN ('queued','sent')`, r.id, type);
   if (dup) return bad(res, 'Bu komut zaten sırada bekliyor.', 409);
   const c = run('INSERT INTO commands (rig_id, type, payload, created_by, created_at) VALUES (?,?,?,?,?)',
     r.id, type, '{}', req.user.id, now());
   res.json({ ok: true, id: Number(c.lastInsertRowid) });
+});
+
+// ---------- Otomatik OC ----------
+// Agent seçilen modeldeki kartlarda adım adım bellek/güç/voltaj dener; en verimli kararlı değeri profil olarak kaydeder.
+router.post('/rigs/:id/oc-tune', (req, res) => {
+  const r = rigsSvc.ownedRig(req.user.id, req.params.id);
+  if (!r) return bad(res, 'Rig bulunamadı.', 404);
+  if (!r.last_seen_at || r.last_seen_at < now() - ONLINE_SEC) return bad(res, 'Rig çevrimdışı.');
+  if (r.miner_status !== 'running') return bad(res, 'Önce miner çalışıyor olmalı: ölçüm hashrate üzerinden yapılır.');
+  const fs = r.flight_sheet_id ? get('SELECT algo FROM flight_sheets WHERE id = ?', r.flight_sheet_id) : null;
+  if (!fs) return bad(res, "Rig'e flight sheet atanmamış.");
+  const model = str(req.body.model, 80);
+  const g = get('SELECT vendor, COUNT(*) AS n FROM gpus WHERE rig_id = ? AND model = ? AND present = 1', r.id, model);
+  if (!g || !g.n) return bad(res, `Bu rig'de "${model}" kartı yok.`);
+  if (get(`SELECT 1 FROM commands WHERE rig_id = ? AND type = 'oc_tune' AND status IN ('queued','sent')`, r.id)) {
+    return bad(res, "Bu rig'de zaten bir otomatik OC çalışıyor.", 409);
+  }
+  const user = get('SELECT temp_limit FROM users WHERE id = ?', req.user.id);
+  const effective = rigsSvc.effectiveOc(r.id).find((x) => x.model === model && x.present);
+  const payload = {
+    model, vendor: g.vendor, algo: fs.algo, temp_limit: user.temp_limit, bounds: rigsSvc.OC_FIELDS[g.vendor],
+    start: effective && effective.profile ? rigsSvc.parseJson(effective.profile.params, {}) : null,
+  };
+  const c = run('INSERT INTO commands (rig_id, type, payload, created_by, created_at) VALUES (?,?,?,?,?)',
+    r.id, 'oc_tune', JSON.stringify(payload), req.user.id, now());
+  run('UPDATE rigs SET tune_state = ? WHERE id = ?', JSON.stringify({ status: 'queued', model, algo: fs.algo, cards: g.n, updated_at: now() }), r.id);
+  res.json({ ok: true, id: Number(c.lastInsertRowid) });
+});
+
+router.post('/rigs/:id/oc-tune/cancel', (req, res) => {
+  const r = rigsSvc.ownedRig(req.user.id, req.params.id);
+  if (!r) return bad(res, 'Rig bulunamadı.', 404);
+  tx(() => {
+    // Henüz rig'e gitmediyse doğrudan iptal; gittiyse agent'a durdurma komutu
+    run(`UPDATE commands SET status = 'failed', result = 'Kullanıcı iptal etti', finished_at = ? WHERE rig_id = ? AND type = 'oc_tune' AND status = 'queued'`, now(), r.id);
+    if (get(`SELECT 1 FROM commands WHERE rig_id = ? AND type = 'oc_tune' AND status = 'sent'`, r.id)) {
+      run('INSERT INTO commands (rig_id, type, payload, created_by, created_at) VALUES (?,?,?,?,?)', r.id, 'oc_tune_cancel', '{}', req.user.id, now());
+    } else {
+      const prev = rigsSvc.parseJson(r.tune_state, {}) || {};
+      run('UPDATE rigs SET tune_state = ? WHERE id = ?', JSON.stringify({ ...prev, status: 'cancelled', updated_at: now() }), r.id);
+    }
+  });
+  res.json({ ok: true });
+});
+
+router.post('/rigs/:id/oc-tune/dismiss', (req, res) => {
+  const r = rigsSvc.ownedRig(req.user.id, req.params.id);
+  if (!r) return bad(res, 'Rig bulunamadı.', 404);
+  run(`UPDATE rigs SET tune_state = NULL WHERE id = ? AND (tune_state IS NULL OR json_extract(tune_state, '$.status') IN ('done','failed','cancelled'))`, r.id);
+  res.json({ ok: true });
 });
 
 // ---------- Cüzdanlar ----------
@@ -534,10 +584,7 @@ router.post('/flight-sheets/:id/apply', (req, res) => {
 });
 
 // ---------- OC profilleri ----------
-const OC_FIELDS = {
-  nvidia: { core_offset: [-1000, 1000], mem_offset: [-2000, 3000], power_limit_w: [50, 450], fan_pct: [0, 100] },
-  amd: { core_clock: [300, 2000], mem_clock: [300, 2500], core_mv: [700, 1200], mem_mv: [700, 1100], fan_pct: [0, 100] },
-};
+const { OC_FIELDS } = rigsSvc;
 
 function ocInput(b) {
   const vendor = b.vendor === 'amd' ? 'amd' : b.vendor === 'nvidia' ? 'nvidia' : null;

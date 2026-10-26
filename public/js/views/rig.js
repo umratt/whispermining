@@ -5,6 +5,8 @@ import {
 import { navigate } from '../app.js';
 import { timeChart, emptyNote } from '../charts.js';
 
+const OC_LABELS = { core_offset: 'core', mem_offset: 'mem', power_limit_w: 'PL', fan_pct: 'fan', core_clock: 'core', mem_clock: 'mem', core_mv: 'mV', mem_mv: 'mem mV' };
+
 const COMMAND_CONFIRM = {
   reboot: ['Rig yeniden başlatılsın mı?', 'Rig kapanıp açılacak. Madencilik birkaç dakika duracak.'],
   miner_stop: ['Miner durdurulsun mu?', 'Kazanç, siz tekrar başlatana kadar durur.'],
@@ -24,6 +26,7 @@ export async function rigView(el, [rigId]) {
       <div class="card-head"><h2>Kartlar</h2><span class="small dim hide-sm">Satıra tıklayın: kartın 24 saatlik grafikleri</span></div>
       <div class="table-wrap" id="rig-gpus"></div>
     </div>
+    <div class="card section" id="rig-tune"></div>
     <div class="charts section">
       <div class="card chart-card"><h3>Hashrate · 24 saat</h3><div class="chart-box"><canvas id="c-hash"></canvas></div></div>
       <div class="card chart-card"><h3>En yüksek sıcaklık · 24 saat</h3><div class="chart-box"><canvas id="c-temp"></canvas></div></div>
@@ -108,6 +111,62 @@ export async function rigView(el, [rigId]) {
       </table>`) : String(html`<div class="empty">Agent henüz kart bilgisi göndermedi.</div>`);
   }
 
+  const PHASES = { baseline: 'Taban ölçüm', mem: 'Bellek', power: 'Güç limiti', core: 'Çekirdek', voltage: 'Voltaj', final: 'Bitiriliyor' };
+  const fmtParams = (p) => Object.entries(p || {}).map(([k, v]) => `${OC_LABELS[k] || k} ${v}`).join(' · ') || 'stok';
+  const pct = (a, b) => (a && b ? ` (%${((a / b - 1) * 100).toFixed(1)})` : '');
+
+  function renderTune() {
+    const r = data.rig;
+    const t = r.tune;
+    const box = el.querySelector('#rig-tune');
+    const canStart = r.online && r.miner_status === 'running';
+    if (!t || t.status === 'cancelled') {
+      box.innerHTML = String(html`
+        <div class="card-head"><h2>Otomatik OC</h2><span class="small dim hide-sm">Kartı adım adım dener, en verimli kararlı değeri önerir</span></div>
+        <ul class="list-plain">${data.models.map((m) => html`<li>
+          <span class="badge ${m.vendor}">${m.vendor === 'nvidia' ? 'NV' : 'AMD'}</span><span class="grow">${m.model} <span class="dim">×${m.count}</span></span>
+          <button class="btn sm" data-tune="${m.model}" ${canStart ? '' : 'disabled'}>${icon('oc')}Otomatik bul</button></li>`)}</ul>
+        ${canStart ? '' : html`<div class="small dim" style="padding:0 16px 12px">Başlatmak için rig çevrimiçi ve miner çalışıyor olmalı.</div>`}`);
+      return;
+    }
+    if (t.status === 'queued' || t.status === 'running') {
+      box.innerHTML = String(html`
+        <div class="card-head"><h2>Otomatik OC sürüyor · ${t.model}</h2><button class="btn sm danger" data-tune-cancel>${icon('stop')}İptal</button></div>
+        <div class="card-pad">
+          ${t.status === 'queued' ? html`<p class="muted" style="margin:0">Komut rig'e gönderiliyor…</p>` : html`
+          <dl class="kv" style="max-width:560px">
+            <dt>Aşama</dt><dd>${PHASES[t.phase] || t.phase} · adım ${t.step}</dd>
+            <dt>Denenen</dt><dd class="mono">${fmtParams(t.current)}</dd>
+            <dt>En iyi (kararlı)</dt><dd class="mono">${fmtParams(t.best)}</dd>
+            <dt>Hashrate</dt><dd>${fmtHash(t.baseline_hash)} → ${fmtHash(t.best_hash)}${pct(t.best_hash, t.baseline_hash)}</dd>
+            <dt>Güç</dt><dd>${fmtPower(t.baseline_power)} → ${fmtPower(t.best_power)}</dd>
+            <dt>Kalan (tahmini)</dt><dd>${t.eta_sec ? `~${Math.ceil(t.eta_sec / 60)} dk` : '—'}</dd>
+          </dl>`}
+          <p class="small dim" style="margin:10px 0 0">Bu sırada hashrate dalgalanabilir. Kararsızlık görülürse otomatik olarak son sağlam değere dönülür.</p>
+        </div>`);
+      return;
+    }
+    if (t.status === 'done' && t.result) {
+      const res = t.result;
+      box.innerHTML = String(html`
+        <div class="card-head"><h2>Otomatik OC tamamlandı · ${res.model}</h2><button class="btn sm ghost" data-tune-dismiss>Kapat</button></div>
+        <div class="card-pad">
+          <dl class="kv" style="max-width:560px">
+            <dt>Önerilen</dt><dd class="mono">${fmtParams(res.params)}</dd>
+            ${res.before ? html`<dt>Hashrate</dt><dd>${fmtHash(res.before.hash)} → ${fmtHash(res.after.hash)}${pct(res.after.hash, res.before.hash)}</dd>
+            <dt>Güç</dt><dd>${fmtPower(res.before.power)} → ${fmtPower(res.after.power)}${pct(res.after.power, res.before.power)}</dd>
+            <dt>Verim</dt><dd>${pct(res.after.hash / res.after.power, res.before.hash / res.before.power).replace(/[()]/g, '')}</dd>` : ''}
+          </dl>
+          <p class="small muted" style="margin:10px 0">Öneri OC profillerine kaydedildi. Uygulayana kadar kartlar eski ayarlarıyla çalışır.</p>
+          <div class="btn-row"><button class="btn primary" data-tune-apply="${t.result_profile_id}" data-model="${res.model}" ${t.result_profile_id ? '' : 'disabled'}>${icon('apply')}Bu modele uygula</button></div>
+        </div>`);
+      return;
+    }
+    box.innerHTML = String(html`
+      <div class="card-head"><h2>Otomatik OC tamamlanamadı${t.model ? ` · ${t.model}` : ''}</h2><button class="btn sm ghost" data-tune-dismiss>Kapat</button></div>
+      <div class="card-pad"><div class="callout warn">${t.message || 'Bilinmeyen bir sorun oluştu.'}</div></div>`);
+  }
+
   function renderSide() {
     const r = data.rig;
     el.querySelector('#rig-side').innerHTML = String(html`
@@ -170,7 +229,7 @@ export async function rigView(el, [rigId]) {
 
   async function load() {
     data = await api(`rigs/${rigId}`);
-    renderHead(); renderTiles(); renderGpus(); renderSide();
+    renderHead(); renderTiles(); renderGpus(); renderTune(); renderSide();
     if (Date.now() - historyAt > 60_000) await loadHistory();
   }
 
@@ -233,6 +292,30 @@ export async function rigView(el, [rigId]) {
     });
   }
 
+  async function tuneAction(b) {
+    if (b.dataset.tune) {
+      const m = data.models.find((x) => x.model === b.dataset.tune);
+      const ok = await confirmDialog(`${m.model} için otomatik OC başlatılsın mı?`,
+        `${m.count} kartta bellek, güç limiti ve ${m.vendor === 'amd' ? 'voltaj' : 'çekirdek'} değerleri adım adım denenecek (yaklaşık 30–60 dk). `
+        + 'Bu sürede hashrate dalgalanabilir. Kararsızlık, çökme ya da sıcaklık sınırı aşılırsa son sağlam değere dönülür. Sonuç size öneri olarak sunulur.',
+        'Başlat', false);
+      if (!ok) return;
+      await api(`rigs/${rigId}/oc-tune`, { method: 'POST', body: { model: m.model } });
+      toast('Otomatik OC başlatıldı.');
+    } else if (b.hasAttribute('data-tune-cancel')) {
+      if (!(await confirmDialog('Otomatik OC iptal edilsin mi?', 'Kartlar başlangıç değerlerine döner.', 'İptal et'))) return;
+      await api(`rigs/${rigId}/oc-tune/cancel`, { method: 'POST' });
+      toast('İptal ediliyor.');
+    } else if (b.hasAttribute('data-tune-dismiss')) {
+      await api(`rigs/${rigId}/oc-tune/dismiss`, { method: 'POST' });
+    } else if (b.dataset.tuneApply) {
+      await api(`rigs/${rigId}`, { method: 'PUT', body: { oc_models: { [b.dataset.model]: Number(b.dataset.tuneApply) } } });
+      await api(`rigs/${rigId}/oc-tune/dismiss`, { method: 'POST' });
+      toast("Profil uygulandı, rig'e gönderiliyor.");
+    }
+    await load();
+  }
+
   async function gpuDialog(gpuId) {
     const g = data.gpus.find((x) => x.id === gpuId);
     if (!g) return;
@@ -276,6 +359,8 @@ export async function rigView(el, [rigId]) {
     const cmd = e.target.closest('[data-cmd]');
     if (cmd && !cmd.disabled) return sendCommand(cmd.dataset.cmd);
     if (e.target.closest('[data-edit]')) return editDialog().catch((err) => toast(err.message, 'bad'));
+    const tb = e.target.closest('[data-tune],[data-tune-cancel],[data-tune-dismiss],[data-tune-apply]');
+    if (tb && !tb.disabled) return tuneAction(tb).catch((err) => toast(err.message, 'bad'));
     const row = e.target.closest('[data-gpu]');
     if (row) gpuDialog(Number(row.dataset.gpu)).catch((err) => toast(err.message, 'bad'));
   });

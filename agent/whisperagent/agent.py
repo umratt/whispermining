@@ -7,6 +7,7 @@ import subprocess
 import time
 
 from . import VERSION, config, display, oc, updater
+from .tuner import Tuner
 from .api import Api, ApiError
 from .hw import backend
 from .miners import SPECS, MinerError, MinerProcess, download_miner
@@ -38,6 +39,8 @@ class Agent:
         self.last_hw_scan = 0
         self.next_update_check = time.time() + 120
         self.view = {"server": self.server}
+        self.tuner = None          # çalışan otomatik OC (varsa)
+        self.last_rows = []
 
     # ---------- kimlik ----------
     def identity(self):
@@ -160,6 +163,17 @@ class Agent:
         else:
             self.miner_state = "starting"
 
+    # ---------- OC ----------
+    def effective_overclock(self):
+        items = list((self.cfg or {}).get("overclock") or [])
+        if self.tuner and not self.tuner.finished:
+            params = self.tuner.wanted_params()
+            items = [dict(i, params=params, profile="otomatik OC") if i.get("bus_id") in self.tuner.targets else i for i in items]
+        return items
+
+    def apply_oc(self):
+        return oc.apply_all(self.gpus, self.effective_overclock(), self.hw if self.fake else None)
+
     # ---------- ayarlar ----------
     def apply_config(self):
         self.cfg = self.api.config()
@@ -168,7 +182,7 @@ class Agent:
         oc_sig = json.dumps(self.cfg.get("overclock"), sort_keys=True)
         if oc_sig != self.oc_signature:
             self.oc_signature = oc_sig
-            oc.apply_all(self.gpus, self.cfg.get("overclock"), self.hw if self.fake else None)
+            self.apply_oc()  # otomatik OC sürüyorsa onun kartlarına dokunulmaz
         fs_sig = json.dumps(self.cfg.get("flight_sheet"), sort_keys=True)
         if fs_sig != self.fs_signature:
             self.fs_signature = fs_sig
@@ -211,7 +225,28 @@ class Agent:
                     self.apply_config()
                     out = "Miner yeniden başlatıldı" if self.miners else (self.error or "Çalıştırılacak miner yok")
                 elif ctype == "apply_oc":
-                    out = "; ".join(oc.apply_all(self.gpus, (self.cfg or {}).get("overclock"), self.hw if self.fake else None)) or "OC listesi boş"
+                    out = "; ".join(self.apply_oc()) or "OC listesi boş"
+                elif ctype == "oc_tune":
+                    if self.tuner and not self.tuner.finished:
+                        status, code, out = "failed", 1, "Zaten bir otomatik OC çalışıyor"
+                    elif self.miner_state != "running":
+                        status, code, out = "failed", 1, "Miner çalışmıyor; otomatik OC hashrate ölçerek çalışır"
+                    else:
+                        payload = c.get("payload") or {}
+                        self.tuner = Tuner(c["id"], payload, self.gpus)
+                        if not self.tuner.targets:
+                            self.tuner = None
+                            status, code, out = "failed", 1, f"Bu rig'de {payload.get('model')} yok"
+                        else:
+                            log.info("Otomatik OC başladı: %s (%d kart)", self.tuner.model, len(self.tuner.targets))
+                            self.apply_oc()
+                            continue  # sonuç iş bitince bildirilir
+                elif ctype == "oc_tune_cancel":
+                    if self.tuner and not self.tuner.finished:
+                        self.tuner.cancel()
+                        out = "İptal ediliyor; başlangıç değerlerine dönülecek"
+                    else:
+                        out = "Çalışan otomatik OC yok"
                 elif ctype == "reboot":
                     self.api.command_result(c["id"], "done", 0, "Yeniden başlatılıyor")
                     self.stop_miners()
@@ -243,6 +278,8 @@ class Agent:
             s = dict(sensors.get(g["bus_id"], {}))
             s.update({k: v for k, v in mined.get(g["bus_id"], {}).items() if v is not None})
             s.setdefault("hashrate", 0)
+            if self.fake:
+                s["hashrate"] = self.hw.fake_hash(g["bus_id"], s["hashrate"])  # sahte kart OC'ye tepki verir
             rows.append({"bus_id": g["bus_id"], **s})
         if not any(p.running() for _s, p, _g in self.miners) and self.miner_state in ("running", "starting"):
             self.miner_state = "stopped"
@@ -252,6 +289,23 @@ class Agent:
         return {"miner": {"status": self.miner_state, "uptime_sec": uptime, "error": self.error},
                 "system": {"cpu_load": sysinfo.get("cpu_load"), "ram_used_mb": sysinfo.get("ram_used_mb")},
                 "gpus": rows}
+
+    def step_tuner(self):
+        act = self.tuner.advance(time.time())
+        if act == "apply":
+            log.info("Otomatik OC adım %d (%s): %s", self.tuner.steps, self.tuner.phase(), self.tuner.wanted_params())
+            self.apply_oc()
+        elif act == "finish":
+            t = self.tuner
+            self.tuner = None
+            self.apply_oc()  # kartlar panelde atanmış değerlere döner; öneriyi kullanıcı uygular
+            if t.failed:
+                log.warning("Otomatik OC bitti: %s", t.failed)
+                self.api.command_result(t.cmd_id, "failed", 1, t.failed)
+            else:
+                r = t.result()
+                log.info("Otomatik OC bitti: %s", r.get("summary"))
+                self.api.command_result(t.cmd_id, "done", 0, json.dumps(r))
 
     def send_stats_safe(self):
         try:
@@ -287,8 +341,16 @@ class Agent:
         if self.error and self.miner_state == "error" and time.time() > self.download_retry_at and not self.miners:
             self.fs_signature = None  # indirme hatası: 5 dakikada bir tekrar dene
 
-        res = self.api.stats(self.collect())
+        payload = self.collect()
+        if self.tuner:
+            restarts = sum(p.restarts for _s, p, _g in self.miners)
+            miners_ok = bool(self.miners) and all(p.running() for _s, p, _g in self.miners)
+            self.tuner.feed(payload["gpus"], miners_ok, restarts)
+            payload["tune"] = self.tuner.status()
+        res = self.api.stats(payload)
         self.view["connection"] = "bağlı"
+        if self.tuner:
+            self.step_tuner()
         if res.get("hardware_required"):
             self.rescan(force=True)
         if res.get("config_version") != self.config_version or self.fs_signature is None:
