@@ -1,4 +1,3 @@
-# Linux tarafında çalışan dosyalar Windows satır sonuyla (CRLF) bozulmasın
-*.sh text eol=lf
-image/rootfs/** text eol=lf
-agent/** text eol=lf
+# Tüm metin dosyaları depoda ve çalışma klasöründe LF (Linux) satır sonuyla
+* text=auto eol=lf
+*.cmd text eol=crlf
