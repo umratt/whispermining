@@ -13,6 +13,8 @@ Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
 Environment=DISPLAY=:0
+# ROCm OpenCL'in RX 470/480/570/580 (Polaris, gfx803) kartları görmesi için gerekli
+Environment=ROC_ENABLE_PRE_VEGA=1
 RuntimeDirectory=wmining
 RuntimeDirectoryPreserve=yes
 

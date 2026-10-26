@@ -20,6 +20,10 @@ NVIDIA_BRANCH="${NVIDIA_BRANCH:-535}"     # GTX 10xx (P106 dahil) → RTX 40xx
 # Güvenilir bir amdgpu-install 22.20 paketi bulunursa: WITH_AMD_OPENCL=1 AMDGPU_INSTALL_URL=...
 AMDGPU_INSTALL_URL="${AMDGPU_INSTALL_URL:-https://repo.radeon.com/amdgpu-install/22.20.5/ubuntu/jammy/amdgpu-install_22.20.50205-1_all.deb}"
 WITH_AMD_OPENCL="${WITH_AMD_OPENCL:-0}"
+# Polaris için yedek yol: AMD'nin resmî deposundaki ROCm 5.7.1 OpenCL (Polaris'te çalışan son ROCm).
+# AMD Polaris'i ROCm'da resmî desteklemiyor (ROC_ENABLE_PRE_VEGA=1 gerekir) ve kart PCIe atomics ister: DENEYSEL.
+WITH_AMD_ROCM="${WITH_AMD_ROCM:-1}"
+ROCM_VERSION="${ROCM_VERSION:-5.7.1}"
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
@@ -88,6 +92,21 @@ log "NVIDIA $NVIDIA_BRANCH sürücüsü (Ubuntu'nun hazır derlenmiş modülleri
 in_chroot apt-get install -y -qq --no-install-recommends \
   "linux-modules-nvidia-$NVIDIA_BRANCH-generic" "nvidia-utils-$NVIDIA_BRANCH" "nvidia-compute-utils-$NVIDIA_BRANCH" \
   "libnvidia-compute-$NVIDIA_BRANCH" "xserver-xorg-video-nvidia-$NVIDIA_BRANCH" nvidia-settings xserver-xorg-core >/dev/null
+
+if [ "$WITH_AMD_ROCM" = "1" ]; then
+  log "AMD ROCm $ROCM_VERSION OpenCL (Polaris için deneysel)"
+  mkdir -p "$MNT/etc/apt/keyrings"
+  curl -fsSL https://repo.radeon.com/rocm/rocm.gpg.key | gpg --dearmor > "$MNT/etc/apt/keyrings/rocm.gpg"
+  echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/$ROCM_VERSION jammy main"     > "$MNT/etc/apt/sources.list.d/rocm.list"
+  in_chroot apt-get update -qq   # imza doğrulanmazsa apt burada durur (set -e)
+  in_chroot apt-get install -y -qq --no-install-recommends rocm-opencl-runtime ocl-icd-libopencl1 clinfo >/dev/null
+  in_chroot dpkg-query -W -f='${Package} ${Version}
+' rocm-opencl rocm-core hsa-rocr comgr
+  ls "$MNT/etc/OpenCL/vendors/"
+  echo "/opt/rocm/lib" > "$MNT/etc/ld.so.conf.d/rocm.conf" && in_chroot ldconfig
+  # İmaj kurulduktan sonra apt çalıştırılmıyor; depo tanımı kaldırılır ki istemeden güncelleme olmasın
+  rm -f "$MNT/etc/apt/sources.list.d/rocm.list"
+fi
 
 if [ "$WITH_AMD_OPENCL" = "1" ]; then
   log "AMD OpenCL (Polaris için legacy)"
@@ -161,7 +180,7 @@ in_chroot systemctl enable wmining-firstboot.service wmining-agent.service wmini
 [ -e "$MNT/lib/systemd/system/nvidia-persistenced.service" ] && in_chroot systemctl enable nvidia-persistenced.service >/dev/null
 # tty1 agent'ın durum ekranı; giriş ekranı tty2'de
 in_chroot systemctl mask getty@tty1.service >/dev/null
-echo "WhisperMining OS $VERSION (agent $AGENT_VERSION, NVIDIA $NVIDIA_BRANCH)" > "$MNT/etc/wmining-release"
+echo "WhisperMining OS $VERSION (agent $AGENT_VERSION, NVIDIA $NVIDIA_BRANCH$([ "$WITH_AMD_ROCM" = "1" ] && echo ", AMD ROCm $ROCM_VERSION OpenCL"))" > "$MNT/etc/wmining-release"
 
 log "WMINING bölümü içeriği"
 install -m 644 "$HERE/fat/OKUBENI.txt" "$MNT/wmining/OKUBENI.txt"
