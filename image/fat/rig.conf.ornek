@@ -1,0 +1,10 @@
+# Bu sadece örnektir. Gerçek rig.conf dosyasını panelden indirin:
+# https://www.whisperkripto.com/mining  ->  Rig ekle -> rig.conf ile
+#
+# rig.conf olmadan açılırsa rig eşleştirme kodu üretir ve monitörde gösterir;
+# o kodu panelde "Rig ekle -> Eşleştirme kodu" bölümüne girebilirsiniz.
+
+RIG_ID=00000000-0000-0000-0000-000000000000
+RIG_SECRET=panelden-indirilen-gizli-anahtar
+RIG_NAME=Ornek-Rig
+SERVER_URL=https://www.whisperkripto.com/mining

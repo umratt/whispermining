@@ -1,0 +1,13 @@
+[Unit]
+Description=WhisperMining ilk açılış hazırlığı (disk büyütme, makine kimliği)
+ConditionPathExists=!/var/lib/wmining/firstboot-done
+After=local-fs.target
+Before=wmining-agent.service network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/wmining-firstboot
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

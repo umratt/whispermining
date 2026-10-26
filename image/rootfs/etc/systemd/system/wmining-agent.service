@@ -1,0 +1,18 @@
+[Unit]
+Description=WhisperMining agent
+Wants=network-online.target
+After=network-online.target wmining-firstboot.service wmining-xorg.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/opt/wmining/agent/start.sh
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+Environment=DISPLAY=:0
+RuntimeDirectory=wmining
+RuntimeDirectoryPreserve=yes
+
+[Install]
+WantedBy=multi-user.target

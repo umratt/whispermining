@@ -1,0 +1,21 @@
+WhisperMining OS
+================
+
+Bu bölüm (WMINING) Windows'ta da açılır. Rig ayarları buradadır.
+
+1) Panelden indirdiğiniz rig.conf dosyasını bu klasöre kopyalayın.
+   Panel: https://www.whisperkripto.com/mining  ->  Rig ekle -> rig.conf ile
+   Dosyanın adı tam olarak "rig.conf" olmalı ("rig.conf.txt" değil).
+
+2) Flash belleği rig'e takın, Ethernet kablosunu bağlayın, rig'i açın.
+   Rig birkaç dakika içinde panelde çevrimiçi görünür.
+
+Monitör bağlıysa ekranda rig'in IP adresi, bağlantı durumu ve kartlar görünür.
+Monitör gerekmez; her şey panelden yönetilir.
+
+Windows "bu diski biçimlendirmek ister misiniz" diye sorarsa HAYIR deyin
+(diğer bölüm Linux içindir, biçimlendirirseniz imajı yeniden yazmanız gerekir).
+
+Destek için uzaktan erişim (isteğe bağlı, ileri seviye):
+  Bu klasöre "authorized_keys" adında SSH genel anahtarı koyarsanız ilk açılışta
+  sadece anahtarla SSH girişi açılır. Şifreyle giriş her zaman kapalıdır.

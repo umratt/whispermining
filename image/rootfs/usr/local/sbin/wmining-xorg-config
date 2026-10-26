@@ -1,0 +1,5 @@
+#!/bin/sh
+# Tüm NVIDIA kartları için ekransız çalışan Xorg ayarı üretir (Coolbits=31: fan ve saat ayarı açık).
+# P106-100 gibi görüntü çıkışı olmayan kartlar da bu sayede nvidia-settings ile ayarlanabilir.
+exec nvidia-xconfig --enable-all-gpus --cool-bits=31 --allow-empty-initial-configuration \
+  --use-display-device=None --virtual=640x480 --output-xconfig=/run/wmining-xorg.conf --silent

@@ -1,0 +1,15 @@
+[Unit]
+Description=WhisperMining başsız Xorg (NVIDIA overclock yedek yolu: nvidia-settings)
+After=systemd-modules-load.service nvidia-persistenced.service
+Wants=nvidia-persistenced.service
+ConditionPathExists=/dev/nvidiactl
+
+[Service]
+Type=simple
+ExecStartPre=/usr/local/sbin/wmining-xorg-config
+ExecStart=/usr/bin/Xorg :0 -config /run/wmining-xorg.conf -nolisten tcp -novtswitch -sharevts vt7
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
