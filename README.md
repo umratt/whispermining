@@ -52,7 +52,7 @@ docs/          agent API belgesi
   (T-Rex, lolMiner, TeamRedMiner), OC uygular (NVML / nvidia-settings, amdgpu sysfs), komutları yürütür, kendini günceller.
 - Testler: `cd agent && python -m unittest discover -s tests`
 - Gerçek kart olmadan deneme: `WM_FAKE_HW=karma WM_CONF=rig.conf WM_STATE_DIR=./state WM_RUN_DIR=./run python -m whisperagent`
-- `image/build-image.sh`: Ubuntu 22.04 tabanlı flash imajını üretir (NVIDIA 535; Polaris için AMD legacy OpenCL şu an yok, AMD kaldırdı;
+- `image/build-image.sh`: Ubuntu 22.04 tabanlı flash imajını üretir (NVIDIA 580; Polaris için AMD legacy OpenCL şu an yok, AMD kaldırdı;
   WMINING FAT bölümü, loglar RAM'de). Linux'ta root ister; en kolayı GitHub Actions (`.github/workflows/build-image.yml`).
 - `image/package-agent.sh`: agent güncelleme paketi (panelde Agent sürümleri → Sürüm yayınla).
 

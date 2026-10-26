@@ -146,8 +146,8 @@ router.post('/stats', requirePaired, (req, res) => {
   const tune = (req.body || {}).tune;
   if (tune && typeof tune === 'object') {
     const prev = rigsSvc.parseJson(req.rig.tune_state, {}) || {};
-    const json = JSON.stringify({ ...tune, result_profile_id: prev.result_profile_id, updated_at: now() }).slice(0, 4000);
-    run('UPDATE rigs SET tune_state = ? WHERE id = ?', json, req.rig.id);
+    const json = JSON.stringify({ ...tune, result_profile_id: prev.result_profile_id, updated_at: now() });
+    if (json.length <= 16000) run('UPDATE rigs SET tune_state = ? WHERE id = ?', json, req.rig.id); // aşırı büyükse yok say
   }
   res.json({ ok: true, hardware_required: unknownGpus > 0, ...syncHints(req.rig) });
 });
@@ -179,11 +179,13 @@ router.post('/commands/:id/result', requirePaired, (req, res) => {
   let output = str(b.output, 4000);
   if (cmd.type === 'oc_tune' && status === 'done') {
     // Agent sonucu JSON olarak verir: önerilen değerler yeni bir OC profili olarak kaydedilir (atama kullanıcıya kalır)
-    const r = rigsSvc.parseJson(b.output, null);
-    const profileId = r && req.rig.owner_id ? rigsSvc.saveTunedProfile(req.rig.owner_id, r) : null;
+    const r = rigsSvc.parseJson(String(b.output || '').slice(0, 32000), null); // kart kart sonuç 4000 karakteri aşabilir
+    // Kart başına sonuç (cards) kartlara uygulanmak üzere saklanır; eski tek-profil biçimi profil olarak kaydedilir
+    const ok = !!(r && Array.isArray(r.cards) && r.cards.length);
+    const profileId = !ok && r && req.rig.owner_id ? rigsSvc.saveTunedProfile(req.rig.owner_id, r) : null;
     const prev = rigsSvc.parseJson(req.rig.tune_state, {}) || {};
     run('UPDATE rigs SET tune_state = ? WHERE id = ?',
-      JSON.stringify({ ...prev, status: profileId ? 'done' : 'failed', result: r, result_profile_id: profileId, updated_at: now() }).slice(0, 4000), req.rig.id);
+      JSON.stringify({ ...prev, status: ok || profileId ? 'done' : 'failed', result: r, result_profile_id: profileId, updated_at: now() }).slice(0, 16000), req.rig.id);
     if (r && r.summary) output = str(r.summary, 4000);
   } else if (cmd.type === 'oc_tune') {
     const prev = rigsSvc.parseJson(req.rig.tune_state, {}) || {};

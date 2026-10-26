@@ -1,16 +1,18 @@
-"""Otomatik OC: bir kart modelindeki tüm kartlara aynı değerleri adım adım dener, en verimli KARARLI değeri bulur.
+"""Otomatik OC — KART BAŞINA: aynı model kartlar bile farklı değer kaldırır; her kart kendi en verimli kararlı değerini bulur.
 
-Her adım: değerleri uygula → kartların oturmasını bekle → ölç (hashrate, güç, sıcaklık, red/çökme) → karar ver.
-Kararsızlık (çökme, hashrate 0, red share artışı, sıcaklık sınırı) görülürse son sağlam değere döner ve o aşamayı bitirir.
-Sonuç bir öneridir: panel onu profil olarak kaydeder, kullanıcı uygular. Panel sınırları (bounds) asla aşılmaz.
+Kartlar aynı anda ama her biri kendi değeriyle denenir (süre kart sayısıyla uzamaz). Her adım:
+değerleri uygula → oturmasını bekle → her kartı ayrı ölç (hashrate, güç, sıcaklık, red, hashrate 0) → her kart kendi kararını verir.
 
-NVIDIA: taban ölçüm → bellek offset (+100) → güç limiti (-%5) → çekirdek offset (-100)
-AMD:    taban ölçüm → bellek saati (+25 MHz) → çekirdek voltajı (-25 mV)
+Miner'ın tamamı çökerse (hangi kartın sebep olduğu belli değil) o adımda yeni değer deneyen kartlar İKİYE BÖLÜNEREK
+yeniden denenir: denenmeyenler son sağlam değerlerinde bekler, suçlu kart bulunur ve sadece o geri çekilir.
+
+NVIDIA aşamaları: taban ölçüm → bellek offset (+100) → güç limiti (-%5) → çekirdek offset (-100)
+AMD aşamaları:    taban ölçüm → bellek saati (+25 MHz) → çekirdek voltajı (-25 mV)
+Panel sınırları (bounds) asla aşılmaz. Sonuç bir öneridir; kullanıcı "Uygula" deyince her karta kendi değeri yazılır.
 """
 import os
 import time
 
-# Başlangıç değerleri (kullanıcının profili yoksa). Güvenli tarafta: asıl iş adım adım arama.
 PRESETS = {
     ("P106-100", "etchash"): {"core_offset": 0, "mem_offset": 400},
     ("RTX 3080", "etchash"): {"core_offset": 0, "mem_offset": 600},
@@ -26,133 +28,62 @@ def preset_for(model, algo, vendor):
     return dict(DEFAULT[vendor])
 
 
-class Tuner:
-    def __init__(self, cmd_id, payload, gpus, step_sec=None, t=None):
-        self.cmd_id = cmd_id
-        self.model = payload["model"]
-        self.vendor = payload.get("vendor") or "nvidia"
-        self.algo = payload.get("algo") or ""
-        self.temp_limit = float(payload.get("temp_limit") or 80)
-        self.bounds = payload.get("bounds") or {}
-        self.targets = [g["bus_id"] for g in gpus if g["model"] == self.model]
-        self.step_sec = int(step_sec or os.environ.get("WM_TUNE_STEP_SEC") or 180)
-        self.settle = max(5, int(self.step_sec * 0.35))
-        start = dict(payload.get("start") or {}) or preset_for(self.model, self.algo, self.vendor)
-        self.start_params = self._clamp(start)
-        self.current = dict(self.start_params)
-        self.good = dict(self.start_params)
-        self.phases = ["baseline", "mem", "power", "core"] if self.vendor == "nvidia" else ["baseline", "mem", "voltage"]
+class Card:
+    """Tek bir kartın arama durumu."""
+
+    def __init__(self, bus, idx, vendor, start, safe, clamp):
+        self.bus, self.idx, self.vendor = bus, idx, vendor
+        self.clamp = clamp
+        self.safe = clamp(safe)
+        self.start = clamp(start) if start else dict(self.safe)
+        self.current = dict(self.start)   # denenen değer
+        self.good = dict(self.start)      # son kararlı değer
+        self.phases = ["baseline", "mem", "power", "core"] if vendor == "nvidia" else ["baseline", "mem", "voltage"]
         self.phase_i = 0
         self.no_gain = 0
-        self.steps = 0
-        self.max_steps = 40
-        self.best = None          # en iyi kararlı ölçüm: {hash, power, eff, temp}
+        self.best = None
         self.baseline = None
         self.power_ref = None
-        self.history = []         # [(aşama, değerler, ölçüm, kararlı mı)]
-        self.finished = False
-        self.fell_back = False    # mevcut profil kararsız çıkıp güvenli başlangıca dönüldü mü
+        self.fell_back = False
         self.failed = None
-        self.cancelled = False
-        self._begin_step(t or time.time())
+        self.history = []
 
-    # ---------- yardımcılar ----------
-    def _clamp(self, p):
-        out = {}
-        for k, v in p.items():
-            if v is None:
-                continue
-            lo, hi = (self.bounds.get(k) or [-10**6, 10**6])
-            out[k] = int(min(hi, max(lo, round(float(v)))))
-        return out
-
-    def _begin_step(self, t):
-        self.step_started = t
-        self.samples = []
-        self.restarts_at_start = None
+    @property
+    def done(self):
+        return self.phase_i >= len(self.phases)
 
     def phase(self):
-        return self.phases[self.phase_i] if self.phase_i < len(self.phases) else "final"
+        return self.phases[self.phase_i] if not self.done else "final"
 
-    def wanted_params(self):
-        return dict(self.current)
+    def _finish_with_good(self):
+        self.phase_i = len(self.phases)
+        self.current = dict(self.good)
 
-    # ---------- ölçüm ----------
-    def feed(self, rows, miners_ok, restarts, t=None):
-        """Her istatistik turunda çağrılır. Oturma süresinden sonraki örnekler ölçüme girer."""
-        if self.finished:
-            return
-        if self.restarts_at_start is None:
-            self.restarts_at_start = restarts
-        if (t or time.time()) - self.step_started < self.settle:
-            return
-        by = {r["bus_id"]: r for r in rows}
-        sample = []
-        for b in self.targets:
-            r = by.get(b)
-            if r is None:
-                self.samples.append(None)  # kart kayboldu
-                return
-            sample.append(r)
-        self.samples.append({"rows": sample, "ok": miners_ok and restarts == self.restarts_at_start})
+    def fallback_to_safe(self):
+        """Mevcut değer kararsız: güvenli başlangıca dön (tek sefer). Dönülemezse False."""
+        if self.fell_back or self.safe == self.start:
+            return False
+        self.fell_back = True
+        self.start = dict(self.safe)
+        self.current = dict(self.safe)
+        self.good = dict(self.safe)
+        self.phase_i = 0
+        return True
 
-    def _measure(self):
-        good = [s for s in self.samples if s]
-        if not good or any(s is None for s in self.samples):
-            return None, "kart kayboldu"
-        n = len(good)
-        hashes = [sum(r.get("hashrate") or 0 for r in s["rows"]) for s in good]
-        powers = [sum(r.get("power") or 0 for r in s["rows"]) for s in good]
-        temps = [max((r.get("temp") or 0) for r in s["rows"]) for s in good]
-        rej = [sum(r.get("rejected") or 0 for r in s["rows"]) for s in good]
-        any_zero = any(min((r.get("hashrate") or 0) for r in s["rows"]) <= 0 for s in good)
-        m = {"hash": sum(hashes) / n, "power": sum(powers) / n, "temp": max(temps), "rejected": rej[-1] - rej[0]}
-        m["eff"] = m["hash"] / m["power"] if m["power"] else 0
-        reason = None
-        if not all(s["ok"] for s in good):
-            reason = "miner yeniden başladı"
-        elif any_zero:
-            reason = "bir kartta hashrate 0"
-        elif m["temp"] >= self.temp_limit:
-            reason = f"sıcaklık {m['temp']:.0f}°C"
-        elif m["rejected"] > 1:
-            reason = f"{m['rejected']:.0f} red share"
-        return m, reason
+    def _accept(self, m):
+        self.good = dict(self.current)
+        self.best = m
 
-    # ---------- karar ----------
-    def advance(self, t):
-        """'apply' dönerse yeni değerler uygulanmalı; 'finish' dönerse iş bitti."""
-        if self.finished:
-            return "finish"
-        if self.cancelled:
-            self.current = dict(self.start_params)
-            self.failed = "Kullanıcı iptal etti"
-            self.finished = True
-            return "finish"
-        if t - self.step_started < self.step_sec:
-            return None
-        if len([s for s in self.samples if s]) < 2 and not any(s is None for s in self.samples):
-            self.step_started = t - self.step_sec + 30  # yeterli örnek yok: biraz daha bekle
-            return None
-        m, problem = self._measure()
-        if m is None:
-            self.failed = f"Ayar durduruldu: {problem}. Başlangıç değerlerine dönüldü."
-            self.current = dict(self.start_params)
-            self.finished = True
-            return "finish"
-        stable = problem is None
-        self.history.append({"phase": self.phase(), "params": dict(self.current),
-                             "hash": round(m["hash"]), "power": round(m["power"], 1), "temp": round(m["temp"]), "ok": stable, "why": problem})
-        self.steps += 1
-        self._decide(m, stable)
-        if self.steps >= self.max_steps:
-            self.phase_i = len(self.phases)
-        if self.phase() == "final":
-            self.current = dict(self.good)
-            self.finished = True
-            return "finish"
-        self._begin_step(t)
-        return "apply"
+    def _mem_key(self):
+        return ("mem_offset", 100) if self.vendor == "nvidia" else ("mem_clock", 25)
+
+    def _step_mem(self):
+        key, step = self._mem_key()
+        nxt = self.clamp({key: int(self.current.get(key, 0)) + step})[key]
+        if nxt == self.current.get(key):
+            return False
+        self.current[key] = nxt
+        return True
 
     def _next_phase(self):
         self.phase_i += 1
@@ -160,48 +91,32 @@ class Tuner:
         self.current = dict(self.good)
         p = self.phase()
         if p == "mem":
-            self._step_mem()
-        elif p == "power":
-            # Güç limiti ölçülen kart başı gücün %95'inden başlar
-            per_card = (self.best["power"] / max(1, len(self.targets))) if self.best else 0
-            if per_card <= 0:
+            if not self._step_mem():
                 return self._next_phase()
-            self.power_ref = per_card
-            self.current["power_limit_w"] = int(per_card * 0.95)
-            self.current = self._clamp(self.current)
+        elif p == "power":
+            if not self.best or not self.best["power"]:
+                return self._next_phase()
+            self.power_ref = self.best["power"]
+            self.current["power_limit_w"] = int(self.power_ref * 0.95)
+            self.current = self.clamp(self.current)
         elif p == "core":
             self.current["core_offset"] = int(self.good.get("core_offset", 0)) - 100
-            self.current = self._clamp(self.current)
+            self.current = self.clamp(self.current)
         elif p == "voltage":
             self.current["core_mv"] = int(self.good.get("core_mv", 950)) - 25
-            self.current = self._clamp(self.current)
+            self.current = self.clamp(self.current)
 
-    def _step_mem(self):
-        key, step = ("mem_offset", 100) if self.vendor == "nvidia" else ("mem_clock", 25)
-        nxt = self._clamp({key: int(self.current.get(key, 0)) + step})[key]
-        if nxt == self.current.get(key):  # sınıra geldik
-            return False
-        self.current[key] = nxt
-        return True
-
-    def _accept(self, m):
-        self.good = dict(self.current)
-        self.best = m
-
-    def _decide(self, m, stable):
+    def decide(self, m, stable, why=None):
+        """Bir ölçüm sonucu: kararı ver, sıradaki denenecek değeri self.current'a koy."""
+        self.history.append({"phase": self.phase(), "params": dict(self.current), "hash": round(m["hash"]) if m else 0,
+                             "power": round(m["power"], 1) if m else 0, "ok": stable, "why": why})
+        self.history = self.history[-12:]
         p = self.phase()
         if p == "baseline":
             if not stable:
-                safe = self._clamp(preset_for(self.model, self.algo, self.vendor))
-                if not self.fell_back and safe != self.start_params:
-                    # Mevcut profil kararsız (ör. voltaj çok düşük): güvenli başlangıç değerleriyle yeniden ölç
-                    self.fell_back = True
-                    self.start_params = dict(safe)
-                    self.current = dict(safe)
-                    self.good = dict(safe)
-                    return
-                self.failed = "Güvenli başlangıç değerleriyle bile kararsız; kartı, riser'ı ve güç kablolarını kontrol edin."
-                self.phase_i = len(self.phases)
+                if not self.fallback_to_safe():
+                    self.failed = f"Güvenli değerlerle bile kararsız ({why}); kartı, riser'ı ve kabloları kontrol edin."
+                    self._finish_with_good()
                 return
             self.baseline = m
             self._accept(m)
@@ -215,63 +130,247 @@ class Tuner:
                 self.no_gain += 1
             if not stable or self.no_gain >= 2 or not self._step_mem():
                 if not stable:
-                    # Kararsız değerin hemen altı da sınırda olabilir: bir adım güvenlik payı bırak
-                    key, step = ("mem_offset", 100) if self.vendor == "nvidia" else ("mem_clock", 25)
-                    if self.good.get(key, 0) > self.start_params.get(key, 0):
+                    key, step = self._mem_key()  # kararsızın hemen altı da sınırda olabilir: bir adım pay bırak
+                    if self.good.get(key, 0) > self.start.get(key, 0):
                         self.good[key] = int(self.good[key]) - step
                 self._next_phase()
             return
-        if p in ("power", "core", "voltage"):
-            # Verim artmalı ve hashrate en iyi değerin %98,5'inin altına düşmemeli
-            better = stable and m["eff"] > self.best["eff"] * 1.002 and m["hash"] >= self.best["hash"] * 0.985
-            if better:
-                self._accept(m)
-                if p == "power":
-                    nxt = int(self.current["power_limit_w"] - self.power_ref * 0.05)
-                    floor = int(self.power_ref * 0.6)
-                    if nxt < floor:
-                        return self._next_phase()
-                    self.current["power_limit_w"] = nxt
-                elif p == "core":
-                    if self.current["core_offset"] <= int(self.start_params.get("core_offset", 0)) - 300:
-                        return self._next_phase()
-                    self.current["core_offset"] -= 100
-                else:
-                    self.current["core_mv"] -= 25
-                prev = dict(self.current)
-                self.current = self._clamp(self.current)
-                if self.current == self.good or self.current != prev:
-                    return self._next_phase()
+        # power / core / voltage: verim artmalı, hashrate en iyinin %98,5'inin altına düşmemeli
+        better = stable and m["eff"] > self.best["eff"] * 1.002 and m["hash"] >= self.best["hash"] * 0.985
+        if not better:
+            return self._next_phase()
+        self._accept(m)
+        before = dict(self.current)
+        if p == "power":
+            nxt = int(self.current["power_limit_w"] - self.power_ref * 0.05)
+            if nxt < int(self.power_ref * 0.6):
+                return self._next_phase()
+            self.current["power_limit_w"] = nxt
+        elif p == "core":
+            if self.current["core_offset"] <= int(self.start.get("core_offset", 0)) - 300:
+                return self._next_phase()
+            self.current["core_offset"] -= 100
+        else:
+            self.current["core_mv"] -= 25
+        self.current = self.clamp(self.current)
+        if self.current == before:  # sınıra geldik
+            self._next_phase()
+
+
+class Tuner:
+    def __init__(self, cmd_id, payload, gpus, step_sec=None, t=None):
+        self.cmd_id = cmd_id
+        self.model = payload["model"]
+        self.vendor = payload.get("vendor") or "nvidia"
+        self.algo = payload.get("algo") or ""
+        self.temp_limit = float(payload.get("temp_limit") or 80)
+        self.bounds = payload.get("bounds") or {}
+        self.step_sec = int(step_sec or os.environ.get("WM_TUNE_STEP_SEC") or 180)
+        self.settle = max(5, int(self.step_sec * 0.35))
+        safe = preset_for(self.model, self.algo, self.vendor)
+        start_by_bus = payload.get("start_by_bus") or {}
+        common = payload.get("start")  # eski biçim: tüm kartlar için tek başlangıç
+        self.cards = {}
+        for g in gpus:
+            if g["model"] != self.model:
+                continue
+            start = start_by_bus.get(g["bus_id"]) if g["bus_id"] in start_by_bus else common
+            self.cards[g["bus_id"]] = Card(g["bus_id"], g.get("index", 0), self.vendor, start or None, safe, self._clamp)
+        self.targets = list(self.cards)
+        self.mode = "parallel"
+        self.isolate_queue = []   # sırayla denenecek kart grupları
+        self.iso = None           # şu an tek başına denenen grup (bus listesi)
+        self.steps = 0
+        self.max_steps = 80
+        self.finished = False
+        self.failed = None
+        self.cancelled = False
+        self.global_fallback = False
+        self._begin_step(t or time.time())
+
+    def _clamp(self, p):
+        out = {}
+        for k, v in (p or {}).items():
+            if v is None:
+                continue
+            lo, hi = (self.bounds.get(k) or [-10**6, 10**6])
+            out[k] = int(min(hi, max(lo, round(float(v)))))
+        return out
+
+    def _begin_step(self, t):
+        self.step_started = t
+        self.samples = []
+        self.restarts_at_start = None
+
+    def active(self):
+        return [c for c in self.cards.values() if not c.done]
+
+    # ---------- agent'a uygulanacak değerler ----------
+    def wanted_params_by_bus(self):
+        out = {}
+        for bus, c in self.cards.items():
+            if c.done:
+                out[bus] = dict(c.good)
+            elif self.mode == "isolate":
+                out[bus] = dict(c.current if bus in self.iso else c.good)
             else:
-                self._next_phase()
+                out[bus] = dict(c.current)
+        return out
+
+    # ---------- ölçüm ----------
+    def feed(self, rows, miners_ok, restarts, t=None):
+        if self.finished:
+            return
+        if self.restarts_at_start is None:
+            self.restarts_at_start = restarts
+        if (t or time.time()) - self.step_started < self.settle:
+            return
+        by = {r["bus_id"]: r for r in rows}
+        if any(b not in by for b in self.cards):
+            self.samples.append(None)  # kart kayboldu
+            return
+        self.samples.append({"rows": {b: by[b] for b in self.cards}, "ok": miners_ok and restarts == self.restarts_at_start})
+
+    def _card_measure(self, bus, good):
+        rs = [s["rows"][bus] for s in good]
+        n = len(rs)
+        m = {"hash": sum(r.get("hashrate") or 0 for r in rs) / n, "power": sum(r.get("power") or 0 for r in rs) / n,
+             "temp": max((r.get("temp") or 0) for r in rs),
+             "rejected": (rs[-1].get("rejected") or 0) - (rs[0].get("rejected") or 0)}
+        m["eff"] = m["hash"] / m["power"] if m["power"] else 0
+        why = None
+        if min((r.get("hashrate") or 0) for r in rs) <= 0:
+            why = "hashrate 0"
+        elif m["temp"] >= self.temp_limit:
+            why = f"sıcaklık {m['temp']:.0f}°C"
+        elif m["rejected"] > 1:
+            why = f"{m['rejected']:.0f} red share"
+        return m, why
+
+    # ---------- karar ----------
+    def advance(self, t):
+        if self.finished:
+            return "finish"
+        if self.cancelled:
+            for c in self.cards.values():
+                c.good = dict(c.start)
+            self.failed = "Kullanıcı iptal etti"
+            self.finished = True
+            return "finish"
+        # Miner çöktüyse sonucu beklemeye gerek yok: adım hemen değerlendirilir (sadece kararlılık tam süre ister)
+        crashed = any(s is not None and not s["ok"] for s in self.samples)
+        if t - self.step_started < self.step_sec and not crashed:
+            return None
+        if any(s is None for s in self.samples):
+            self.failed = "Ayar durduruldu: bir kart kayboldu (çökmüş olabilir). Kartlar eski değerlerine döndü."
+            for c in self.cards.values():
+                c.good = dict(c.start)
+            self.finished = True
+            return "finish"
+        good = [s for s in self.samples if s]
+        if len(good) < 2 and not crashed:
+            self.step_started = t - self.step_sec + 30  # yeterli örnek yok: biraz daha bekle
+            return None
+        global_ok = all(s["ok"] for s in good)
+        self.steps += 1
+
+        if self.mode == "isolate":
+            group = [self.cards[b] for b in self.iso]
+            if global_ok:
+                # Bu gruptakiler birlikte kararlı: her kart kendi ölçümüyle karar verir
+                for c in group:
+                    m, why = self._card_measure(c.bus, good)
+                    c.decide(m, why is None, why)
+            elif len(group) == 1:
+                m, why = self._card_measure(group[0].bus, good)
+                group[0].decide(m, False, "miner çöktü")  # suçlu bulundu
+            else:
+                half = len(group) // 2  # suçlu bu grupta: ikiye bölüp ayrı ayrı dene
+                self.isolate_queue[:0] = [[c.bus for c in group[:half]], [c.bus for c in group[half:]]]
+            self._next_isolate()
+        elif not global_ok:
+            self._handle_global_crash()
+        else:
+            for c in self.active():
+                m, why = self._card_measure(c.bus, good)
+                c.decide(m, why is None, why)
+
+        if self.failed:
+            self.finished = True
+            return "finish"
+        if not self.active() or self.steps >= self.max_steps:
+            for c in self.cards.values():
+                c._finish_with_good()
+            self.finished = True
+            return "finish"
+        self._begin_step(t)
+        return "apply"
+
+    def _handle_global_crash(self):
+        trying = [c for c in self.active() if c.current != c.good]
+        if not trying:
+            # Herkes başlangıç/son sağlam değerindeyken bile çöküyor: herkesi bir kez güvenli değerlere al
+            if not self.global_fallback:
+                self.global_fallback = True
+                if not any([c.fallback_to_safe() for c in self.active()]):
+                    self.failed = "Güvenli değerlerle bile miner çöküyor; kartları ve güç beslemesini kontrol edin."
+                return
+            self.failed = "Güvenli değerlerle bile miner çöküyor; kartları ve güç beslemesini kontrol edin."
+            return
+        # Suçlu belli değil: yeni değer deneyen kartları ikiye bölerek dene (8 kartta ~3 adımda bulunur),
+        # denenmeyenler son sağlam değerinde bekler
+        half = len(trying) // 2
+        self.isolate_queue = [g for g in ([c.bus for c in trying[:half]], [c.bus for c in trying[half:]]) if g]
+        self.mode = "isolate"
+        self._next_isolate()
+
+    def _next_isolate(self):
+        while self.isolate_queue:
+            group = [b for b in self.isolate_queue.pop(0) if not self.cards[b].done]
+            if group:
+                self.iso = group
+                return
+        self.iso = None
+        self.mode = "parallel"
 
     # ---------- rapor ----------
     def cancel(self):
         self.cancelled = True
 
+    def _totals(self, key):
+        vals = [getattr(c, key) for c in self.cards.values()]
+        if any(v is None for v in vals):
+            return None
+        return {"hash": sum(v["hash"] for v in vals), "power": sum(v["power"] for v in vals)}
+
     def status(self):
-        eta = max(0, int((len(self.phases) - self.phase_i) * 4 * self.step_sec - (time.time() - self.step_started)))
-        return {"status": "running" if not self.finished else ("failed" if self.failed else "done"),
-                "model": self.model, "algo": self.algo, "cards": len(self.targets), "phase": self.phase(),
-                "step": self.steps, "current": self.current, "best": self.good,
-                "best_hash": round(self.best["hash"]) if self.best else None,
-                "best_power": round(self.best["power"], 1) if self.best else None,
-                "baseline_hash": round(self.baseline["hash"]) if self.baseline else None,
-                "baseline_power": round(self.baseline["power"], 1) if self.baseline else None,
-                "eta_sec": eta, "message": self.failed}
+        remaining = max((len(c.phases) - c.phase_i for c in self.cards.values()), default=0)
+        eta = max(0, int((remaining * 3 + len(self.isolate_queue)) * self.step_sec - (time.time() - self.step_started)))
+        before, best = self._totals("baseline"), self._totals("best")
+        return {
+            "status": "running" if not self.finished else ("failed" if self.failed else "done"),
+            "model": self.model, "algo": self.algo, "cards": len(self.cards), "per_card": True,
+            "mode": self.mode, "isolating": [self.cards[b].idx for b in self.iso] if self.iso else None, "step": self.steps,
+            "baseline_hash": round(before["hash"]) if before else None, "baseline_power": round(before["power"], 1) if before else None,
+            "best_hash": round(best["hash"]) if best else None, "best_power": round(best["power"], 1) if best else None,
+            "eta_sec": eta, "message": self.failed,
+            "card_list": [{"bus_id": c.bus, "idx": c.idx, "phase": c.phase(), "current": c.current, "good": c.good,
+                           "hash": round(c.best["hash"]) if c.best else None, "done": c.done} for c in self.cards.values()],
+        }
 
     def result(self):
-        r = {"model": self.model, "vendor": self.vendor, "algo": self.algo, "params": self.good, "steps": self.steps,
-             "start_was_unstable": self.fell_back,
-             "history": self.history[-25:]}
-        if self.baseline and self.best:
-            b, a = self.baseline, self.best
-            r["before"] = {"hash": round(b["hash"]), "power": round(b["power"], 1)}
-            r["after"] = {"hash": round(a["hash"]), "power": round(a["power"], 1)}
-            def f(x):
-                return f"{x / 1e6:.1f} MH/s"
-            r["summary"] = (f"{len(self.targets)}× {self.model}: {f(b['hash'])} / {b['power']:.0f} W → "
-                            f"{f(a['hash'])} / {a['power']:.0f} W (verim %{(a['eff'] / b['eff'] - 1) * 100:+.1f}). "
-                            f"Önerilen: {', '.join(f'{k}={v}' for k, v in self.good.items())}"
-                            + (" Not: mevcut profil kararsızdı, güvenli değerlerden başlandı." if self.fell_back else ""))
+        cards = []
+        for c in self.cards.values():
+            item = {"bus_id": c.bus, "idx": c.idx, "params": c.good, "start_was_unstable": c.fell_back, "failed": c.failed}
+            if c.baseline and c.best:
+                item["before"] = {"hash": round(c.baseline["hash"]), "power": round(c.baseline["power"], 1)}
+                item["after"] = {"hash": round(c.best["hash"]), "power": round(c.best["power"], 1)}
+            cards.append(item)
+        r = {"model": self.model, "vendor": self.vendor, "algo": self.algo, "steps": self.steps, "cards": cards}
+        before, after = self._totals("baseline"), self._totals("best")
+        if before and after and before["power"] and after["power"]:
+            r["before"], r["after"] = {k: round(v, 1) for k, v in before.items()}, {k: round(v, 1) for k, v in after.items()}
+            eff = (after["hash"] / after["power"]) / (before["hash"] / before["power"]) - 1
+            r["summary"] = (f"{len(cards)}× {self.model}: {before['hash'] / 1e6:.1f} MH/s / {before['power']:.0f} W → "
+                            f"{after['hash'] / 1e6:.1f} MH/s / {after['power']:.0f} W (verim %{eff * 100:+.1f}), her kart kendi değeriyle.")
         return r

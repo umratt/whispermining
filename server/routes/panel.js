@@ -160,11 +160,13 @@ router.get('/rigs/:id', (req, res) => {
   const summary = rigSummary({ ...r, fs_name: fs?.name, fs_coin: fs?.coin, fs_algo: fs?.algo,
     open_alerts: get('SELECT COUNT(*) AS n FROM alerts WHERE rig_id = ? AND resolved_at IS NULL', r.id).n }, t);
   const eff = new Map(rigsSvc.effectiveOc(r.id).map((g) => [g.id, g]));
-  const gpus = all(`SELECT id, bus_id, idx, vendor, model, vram_mb, driver, vbios, present, oc_profile_id, is_new,
+  const gpus = all(`SELECT id, bus_id, idx, vendor, model, vram_mb, driver, vbios, present, oc_profile_id, oc_params, is_new,
                     hashrate, temp, mem_temp, fan, power, core_clk, mem_clk, accepted, rejected, stats_at
                     FROM gpus WHERE rig_id = ? ORDER BY idx`, r.id)
     .map((g) => ({ ...g, present: !!g.present, is_new: !!g.is_new, fresh: summary.online && g.stats_at >= t - ONLINE_SEC,
-      oc_name: eff.get(g.id)?.profile?.name || null, oc_source: eff.get(g.id)?.source || null }));
+      oc_params: rigsSvc.parseJson(g.oc_params, null),
+      oc_name: eff.get(g.id)?.profile?.name || null, oc_source: eff.get(g.id)?.source || null,
+      oc_effective: eff.get(g.id)?.profile ? rigsSvc.parseJson(eff.get(g.id).profile.params, {}) : null }));
   // Rig'deki her kart modeli ve ona atanmış OC profili (rig ayarlarında model başına seçilir)
   const assigned = new Map(all('SELECT model, oc_profile_id FROM rig_oc WHERE rig_id = ?', r.id).map((x) => [x.model, x.oc_profile_id]));
   const models = all(`SELECT model, vendor, COUNT(*) AS count FROM gpus WHERE rig_id = ? AND present = 1
@@ -234,15 +236,29 @@ router.put('/rigs/:id', (req, res) => {
 router.put('/rigs/:id/gpus/:gpuId', (req, res) => {
   const r = rigsSvc.ownedRig(req.user.id, req.params.id);
   if (!r) return bad(res, 'Rig bulunamadı.', 404);
-  const g = get('SELECT id, vendor FROM gpus WHERE id = ? AND rig_id = ?', Number(req.params.gpuId), r.id);
+  const g = get('SELECT id, vendor, oc_profile_id, oc_params FROM gpus WHERE id = ? AND rig_id = ?', Number(req.params.gpuId), r.id);
   if (!g) return bad(res, 'Kart bulunamadı.', 404);
-  const oc = idOrNull(req.body.oc_profile_id);
-  if (oc !== null) {
-    const p = get('SELECT vendor FROM oc_profiles WHERE id = ? AND user_id = ?', oc, req.user.id);
-    if (!p || p.vendor !== g.vendor) return bad(res, 'Bu karta uygun bir OC profili seçin.');
+  const b = req.body || {};
+  let oc = g.oc_profile_id;
+  if ('oc_profile_id' in b) {
+    oc = idOrNull(b.oc_profile_id);
+    if (oc !== null) {
+      const p = get('SELECT vendor FROM oc_profiles WHERE id = ? AND user_id = ?', oc, req.user.id);
+      if (!p || p.vendor !== g.vendor) return bad(res, 'Bu karta uygun bir OC profili seçin.');
+    }
+  }
+  // oc_params: bu karta özel değerler (null = kaldır, profil/model ayarına dön)
+  let params = g.oc_params;
+  if ('oc_params' in b) {
+    if (b.oc_params === null) params = null;
+    else {
+      const [clean, err] = rigsSvc.cleanOcParams(g.vendor, b.oc_params);
+      if (!clean) return bad(res, err);
+      params = JSON.stringify(clean);
+    }
   }
   tx(() => {
-    run('UPDATE gpus SET oc_profile_id = ?, is_new = 0 WHERE id = ?', oc, g.id);
+    run('UPDATE gpus SET oc_profile_id = ?, oc_params = ?, is_new = 0 WHERE id = ?', oc, params, g.id);
     rigsSvc.bumpConfig(r.id);
   });
   res.json({ ok: true });
@@ -283,10 +299,14 @@ router.post('/rigs/:id/oc-tune', (req, res) => {
     return bad(res, "Bu rig'de zaten bir otomatik OC çalışıyor.", 409);
   }
   const user = get('SELECT temp_limit FROM users WHERE id = ?', req.user.id);
-  const effective = rigsSvc.effectiveOc(r.id).find((x) => x.model === model && x.present);
+  // Her kart kendi mevcut değerlerinden başlar ve kendi en iyi değerini bulur
+  const startByBus = {};
+  for (const x of rigsSvc.effectiveOc(r.id)) {
+    if (x.model === model && x.present) startByBus[x.bus_id] = x.profile ? rigsSvc.parseJson(x.profile.params, {}) : null;
+  }
   const payload = {
     model, vendor: g.vendor, algo: fs.algo, temp_limit: user.temp_limit, bounds: rigsSvc.OC_FIELDS[g.vendor],
-    start: effective && effective.profile ? rigsSvc.parseJson(effective.profile.params, {}) : null,
+    per_card: true, start_by_bus: startByBus,
   };
   const c = run('INSERT INTO commands (rig_id, type, payload, created_by, created_at) VALUES (?,?,?,?,?)',
     r.id, 'oc_tune', JSON.stringify(payload), req.user.id, now());
@@ -308,6 +328,29 @@ router.post('/rigs/:id/oc-tune/cancel', (req, res) => {
     }
   });
   res.json({ ok: true });
+});
+
+// Otomatik OC sonucu: her karta kendi bulunan değerini yaz
+router.post('/rigs/:id/oc-tune/apply', (req, res) => {
+  const r = rigsSvc.ownedRig(req.user.id, req.params.id);
+  if (!r) return bad(res, 'Rig bulunamadı.', 404);
+  const t = rigsSvc.parseJson(r.tune_state, null);
+  const cards = t && t.status === 'done' && t.result && Array.isArray(t.result.cards) ? t.result.cards : null;
+  if (!cards) return bad(res, 'Uygulanacak otomatik OC sonucu yok.');
+  let n = 0;
+  tx(() => {
+    for (const c of cards) {
+      const g = get('SELECT id, vendor FROM gpus WHERE rig_id = ? AND bus_id = ? AND present = 1', r.id, String(c.bus_id));
+      if (!g || !c.params) continue;
+      const [clean] = rigsSvc.cleanOcParams(g.vendor, c.params, { clamp: true });
+      if (!clean) continue;
+      run('UPDATE gpus SET oc_params = ?, is_new = 0 WHERE id = ?', JSON.stringify(clean), g.id);
+      n++;
+    }
+    rigsSvc.bumpConfig(r.id);
+    run('UPDATE rigs SET tune_state = NULL WHERE id = ?', r.id);
+  });
+  res.json({ ok: true, applied: n });
 });
 
 router.post('/rigs/:id/oc-tune/dismiss', (req, res) => {

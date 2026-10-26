@@ -167,8 +167,8 @@ class Agent:
     def effective_overclock(self):
         items = list((self.cfg or {}).get("overclock") or [])
         if self.tuner and not self.tuner.finished:
-            params = self.tuner.wanted_params()
-            items = [dict(i, params=params, profile="otomatik OC") if i.get("bus_id") in self.tuner.targets else i for i in items]
+            wanted = self.tuner.wanted_params_by_bus()  # her kartın kendi denenen değeri
+            items = [dict(i, params=wanted[i["bus_id"]], profile="otomatik OC") if i.get("bus_id") in wanted else i for i in items]
         return items
 
     def apply_oc(self):
@@ -293,7 +293,8 @@ class Agent:
     def step_tuner(self):
         act = self.tuner.advance(time.time())
         if act == "apply":
-            log.info("Otomatik OC adım %d (%s): %s", self.tuner.steps, self.tuner.phase(), self.tuner.wanted_params())
+            log.info("Otomatik OC adım %d (%s): %s", self.tuner.steps, self.tuner.mode,
+                     "; ".join(f"{b}={p}" for b, p in self.tuner.wanted_params_by_bus().items()))
             self.apply_oc()
         elif act == "finish":
             t = self.tuner

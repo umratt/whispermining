@@ -5,6 +5,8 @@ import {
 import { navigate } from '../app.js';
 import { timeChart, emptyNote } from '../charts.js';
 
+const OC_FIELD_NAMES = { core_offset: 'Core offset (MHz)', mem_offset: 'Bellek offset (MHz)', power_limit_w: 'Güç limiti (W)', fan_pct: 'Fan (%)',
+  core_clock: 'Core saat (MHz)', mem_clock: 'Bellek saat (MHz)', core_mv: 'Core voltaj (mV)', mem_mv: 'Bellek voltaj (mV)' };
 const OC_LABELS = { core_offset: 'core', mem_offset: 'mem', power_limit_w: 'PL', fan_pct: 'fan', core_clock: 'core', mem_clock: 'mem', core_mv: 'mV', mem_mv: 'mem mV' };
 
 const COMMAND_CONFIRM = {
@@ -104,7 +106,8 @@ export async function rigView(el, [rigId]) {
               <td class="r hide-md">${eff}</td>
               <td class="r hide-md">${live ? `${g.core_clk ?? '—'} / ${g.mem_clk ?? '—'}` : '—'}</td>
               <td class="r hide-md">${live ? `${g.accepted ?? 0} / ${g.rejected ?? 0}` : '—'}</td>
-              <td class="hide-sm">${g.oc_name ? html`<span class="badge" title="${g.oc_source === 'gpu' ? 'Karta özel' : 'Model ataması'}">${g.oc_name}${g.oc_source === 'gpu' ? ' · kart' : ''}</span>` : html`<span class="dim small">Stok</span>`}</td>
+              <td class="hide-sm">${g.oc_source === 'card' ? html`<span class="badge ok" title="Bu karta özel değerler">${fmtParams(g.oc_params)}</span>`
+      : g.oc_name ? html`<span class="badge" title="${g.oc_source === 'gpu' ? 'Karta atanmış profil' : 'Model ataması'}">${g.oc_name}</span>` : html`<span class="dim small">Stok</span>`}</td>
             </tr>`;
   })}
         </tbody>
@@ -122,7 +125,7 @@ export async function rigView(el, [rigId]) {
     const canStart = r.online && r.miner_status === 'running';
     if (!t || t.status === 'cancelled') {
       box.innerHTML = String(html`
-        <div class="card-head"><h2>Otomatik OC</h2><span class="small dim hide-sm">Kartı adım adım dener, en verimli kararlı değeri önerir</span></div>
+        <div class="card-head"><h2>Otomatik OC</h2><span class="small dim hide-sm">Her kartı ayrı ayrı dener, her karta kendi en verimli kararlı değerini önerir</span></div>
         <ul class="list-plain">${data.models.map((m) => html`<li>
           <span class="badge ${m.vendor}">${m.vendor === 'nvidia' ? 'NV' : 'AMD'}</span><span class="grow">${m.model} <span class="dim">×${m.count}</span></span>
           <button class="btn sm" data-tune="${m.model}" ${canStart ? '' : 'disabled'}>${icon('oc')}Otomatik bul</button></li>`)}</ul>
@@ -135,14 +138,37 @@ export async function rigView(el, [rigId]) {
         <div class="card-pad">
           ${t.status === 'queued' ? html`<p class="muted" style="margin:0">Komut rig'e gönderiliyor…</p>` : html`
           <dl class="kv" style="max-width:560px">
-            <dt>Aşama</dt><dd>${PHASES[t.phase] || t.phase} · adım ${t.step}</dd>
-            <dt>Denenen</dt><dd class="mono">${fmtParams(t.current)}</dd>
-            <dt>En iyi (kararlı)</dt><dd class="mono">${fmtParams(t.best)}</dd>
-            <dt>Hashrate</dt><dd>${fmtHash(t.baseline_hash)} → ${fmtHash(t.best_hash)}${pct(t.best_hash, t.baseline_hash)}</dd>
-            <dt>Güç</dt><dd>${fmtPower(t.baseline_power)} → ${fmtPower(t.best_power)}</dd>
+            <dt>Adım</dt><dd>${t.step}${t.mode === 'isolate' ? html` · <span class="t-warn">miner çöktü, sorumlu kart aranıyor (GPU ${(t.isolating || []).join(', ')})</span>` : ''}</dd>
+            <dt>Toplam hashrate</dt><dd>${fmtHash(t.baseline_hash)} → ${fmtHash(t.best_hash)}${pct(t.best_hash, t.baseline_hash)}</dd>
+            <dt>Toplam güç</dt><dd>${fmtPower(t.baseline_power)} → ${fmtPower(t.best_power)}</dd>
             <dt>Kalan (tahmini)</dt><dd>${t.eta_sec ? `~${Math.ceil(t.eta_sec / 60)} dk` : '—'}</dd>
-          </dl>`}
+          </dl>
+          ${(t.card_list || []).length ? html`<div class="table-wrap" style="margin-top:10px"><table class="num">
+            <thead><tr><th>GPU</th><th>Aşama</th><th>Denenen</th><th class="hide-sm">En iyi (kararlı)</th><th class="r">Hashrate</th></tr></thead>
+            <tbody>${t.card_list.map((c) => html`<tr><td>${c.idx}</td><td>${c.done ? html`<span class="badge ok">Bitti</span>` : PHASES[c.phase] || c.phase}</td>
+              <td class="mono small">${fmtParams(c.current)}</td><td class="mono small hide-sm">${fmtParams(c.good)}</td><td class="r">${fmtHash(c.hash)}</td></tr>`)}</tbody>
+          </table></div>` : ''}`}
           <p class="small dim" style="margin:10px 0 0">Bu sırada hashrate dalgalanabilir. Kararsızlık görülürse otomatik olarak son sağlam değere dönülür.</p>
+        </div>`);
+      return;
+    }
+    if (t.status === 'done' && t.result && Array.isArray(t.result.cards)) {
+      const res = t.result;
+      box.innerHTML = String(html`
+        <div class="card-head"><h2>Otomatik OC tamamlandı · ${res.model}</h2><button class="btn sm ghost" data-tune-dismiss>Kapat</button></div>
+        <div class="card-pad">
+          ${res.before ? html`<p style="margin:0 0 10px"><strong>Toplam:</strong> ${fmtHash(res.before.hash)} / ${fmtPower(res.before.power)} → ${fmtHash(res.after.hash)} / ${fmtPower(res.after.power)}
+            · verim ${pct(res.after.hash / res.after.power, res.before.hash / res.before.power).replace(/[()]/g, '')}</p>` : ''}
+          <div class="table-wrap"><table class="num">
+            <thead><tr><th>GPU</th><th>Önerilen (bu karta özel)</th><th class="r">Hashrate</th><th class="r">Güç</th></tr></thead>
+            <tbody>${res.cards.map((c) => html`<tr>
+              <td>${c.idx}${c.start_was_unstable ? html` <span class="badge warn" title="Kartın eski değeri kararsızdı, güvenli değerlerden başlandı">!</span>` : ''}</td>
+              <td class="mono small">${c.failed ? html`<span class="t-bad">${c.failed}</span>` : fmtParams(c.params)}</td>
+              <td class="r">${c.before ? html`${fmtHash(c.before.hash)} → ${fmtHash(c.after.hash)}` : '—'}</td>
+              <td class="r">${c.before ? html`${fmtPower(c.before.power)} → ${fmtPower(c.after.power)}` : '—'}</td></tr>`)}</tbody>
+          </table></div>
+          <p class="small muted" style="margin:10px 0">Her kart kendi değerini aldı. Uygulayana kadar kartlar eski ayarlarıyla çalışır.</p>
+          <div class="btn-row"><button class="btn primary" data-tune-apply-cards>${icon('apply')}Her karta kendi değerini uygula</button></div>
         </div>`);
       return;
     }
@@ -296,7 +322,7 @@ export async function rigView(el, [rigId]) {
     if (b.dataset.tune) {
       const m = data.models.find((x) => x.model === b.dataset.tune);
       const ok = await confirmDialog(`${m.model} için otomatik OC başlatılsın mı?`,
-        `${m.count} kartta bellek, güç limiti ve ${m.vendor === 'amd' ? 'voltaj' : 'çekirdek'} değerleri adım adım denenecek (yaklaşık 30–60 dk). `
+        `${m.count} kartın HER BİRİ için bellek, güç limiti ve ${m.vendor === 'amd' ? 'voltaj' : 'çekirdek'} değerleri ayrı ayrı denenecek (genelde 30–60 dk; kartlar miner'ı çökertirse 2 saate kadar). `
         + 'Bu sürede hashrate dalgalanabilir. Kararsızlık, çökme ya da sıcaklık sınırı aşılırsa son sağlam değere dönülür. Sonuç size öneri olarak sunulur.',
         'Başlat', false);
       if (!ok) return;
@@ -308,6 +334,9 @@ export async function rigView(el, [rigId]) {
       toast('İptal ediliyor.');
     } else if (b.hasAttribute('data-tune-dismiss')) {
       await api(`rigs/${rigId}/oc-tune/dismiss`, { method: 'POST' });
+    } else if (b.hasAttribute('data-tune-apply-cards')) {
+      const r = await api(`rigs/${rigId}/oc-tune/apply`, { method: 'POST' });
+      toast(`${r.applied} karta kendi değeri uygulandı, rig'e gönderiliyor.`);
     } else if (b.dataset.tuneApply) {
       await api(`rigs/${rigId}`, { method: 'PUT', body: { oc_models: { [b.dataset.model]: Number(b.dataset.tuneApply) } } });
       await api(`rigs/${rigId}/oc-tune/dismiss`, { method: 'POST' });
@@ -319,7 +348,8 @@ export async function rigView(el, [rigId]) {
   async function gpuDialog(gpuId) {
     const g = data.gpus.find((x) => x.id === gpuId);
     if (!g) return;
-    const [{ oc_profiles: ocs }, h] = await Promise.all([api('oc-profiles'), api(`rigs/${rigId}/history?hours=24`)]);
+    const [{ oc_profiles: ocs, fields }, h] = await Promise.all([api('oc-profiles'), api(`rigs/${rigId}/history?hours=24`)]);
+    const shown = g.oc_params || g.oc_effective || {};
     const points = h.gpus[gpuId] || [];
     const gpuCharts = [];
     const dlg = openDialog({
@@ -333,10 +363,27 @@ export async function rigView(el, [rigId]) {
           <div><h3 class="small muted">Güç</h3><div class="chart-box" style="height:150px"><canvas data-c="4"></canvas></div></div>
           <div><h3 class="small muted">Fan</h3><div class="chart-box" style="height:150px"><canvas data-c="3"></canvas></div></div>
         </div>
-        <div class="field"><label>Bu karta özel OC profili</label>
+        <div>
+          <h3 style="margin-bottom:6px">Bu kartın OC değerleri</h3>
+          <p class="small muted" style="margin:0 0 10px">Şu an: <strong>${g.oc_source === 'card' ? 'karta özel değerler' : g.oc_name ? `profil (${g.oc_name})` : 'stok'}</strong>.
+            Alanlar şu anki değerlerle dolu; değiştirip kaydederseniz bu değerler sadece bu karta uygulanır (aynı model diğer kartlar etkilenmez). Boş alan = stok.</p>
+          <div class="form-grid">${Object.entries(fields[g.vendor]).map(([k, [min, max]]) => html`
+            <div class="field"><label>${OC_FIELD_NAMES[k] || k}</label>
+              <input class="input num" type="number" name="own_${k}" min="${min}" max="${max}" step="1" value="${shown[k] ?? ''}" placeholder="stok">
+              <span class="hint">${min} … ${max}</span></div>`)}</div>
+          ${g.oc_params ? html`<button type="button" class="btn sm" data-clear-own style="margin-top:8px">${icon('x')}Karta özel değerleri kaldır</button>` : ''}
+        </div>
+        <div class="field"><label>Ya da bu karta bir OC profili ata</label>
           <select name="oc_profile_id"><option value="">Model atamasını kullan</option>
-            ${ocs.filter((o) => o.vendor === g.vendor).map((o) => html`<option value="${o.id}" ${o.id === g.oc_profile_id ? 'selected' : ''}>${o.name}</option>`)}</select></div>`,
+            ${ocs.filter((o) => o.vendor === g.vendor).map((o) => html`<option value="${o.id}" ${o.id === g.oc_profile_id ? 'selected' : ''}>${o.name}</option>`)}</select>
+          <span class="hint">Öncelik: karta özel değerler → karta atanan profil → model profili.</span></div>`,
       onOpen: (d) => {
+        d.querySelector('[data-clear-own]')?.addEventListener('click', async () => {
+          await api(`rigs/${rigId}/gpus/${gpuId}`, { method: 'PUT', body: { oc_params: null } });
+          toast('Karta özel değerler kaldırıldı.');
+          d.close();
+          await load();
+        });
         const spec = { 1: ['--series-1', 'Hashrate', fmtHash], 2: ['--series-2', 'Sıcaklık', fmtTemp], 3: ['--series-3', 'Fan', fmtPct], 4: ['--series-7', 'Güç', fmtPower] };
         d.querySelectorAll('canvas[data-c]').forEach((c) => {
           const i = Number(c.dataset.c);
@@ -347,8 +394,18 @@ export async function rigView(el, [rigId]) {
         });
       },
       onSubmit: async (form) => {
-        await api(`rigs/${rigId}/gpus/${gpuId}`, { method: 'PUT', body: { oc_profile_id: form.oc_profile_id.value || null } });
-        toast('Kart OC ayarı kaydedildi.');
+        const ownParams = {};
+        let changed = false;
+        for (const k of Object.keys(fields[g.vendor])) {
+          const v = form[`own_${k}`].value;
+          if (v !== '') ownParams[k] = Number(v);
+          if (v !== String(shown[k] ?? '')) changed = true;
+        }
+        const body = { oc_profile_id: form.oc_profile_id.value || null };
+        // Alanlara dokunulmadıysa karta özel değer oluşturma (profil/model ataması geçerli kalsın)
+        if (changed || g.oc_params) body.oc_params = Object.keys(ownParams).length ? ownParams : null;
+        await api(`rigs/${rigId}/gpus/${gpuId}`, { method: 'PUT', body });
+        toast("Kart OC ayarı kaydedildi, rig'e gönderiliyor.");
         await load();
       },
     });
@@ -359,7 +416,7 @@ export async function rigView(el, [rigId]) {
     const cmd = e.target.closest('[data-cmd]');
     if (cmd && !cmd.disabled) return sendCommand(cmd.dataset.cmd);
     if (e.target.closest('[data-edit]')) return editDialog().catch((err) => toast(err.message, 'bad'));
-    const tb = e.target.closest('[data-tune],[data-tune-cancel],[data-tune-dismiss],[data-tune-apply]');
+    const tb = e.target.closest('[data-tune],[data-tune-cancel],[data-tune-dismiss],[data-tune-apply],[data-tune-apply-cards]');
     if (tb && !tb.disabled) return tuneAction(tb).catch((err) => toast(err.message, 'bad'));
     const row = e.target.closest('[data-gpu]');
     if (row) gpuDialog(Number(row.dataset.gpu)).catch((err) => toast(err.message, 'bad'));

@@ -145,29 +145,37 @@ class NewMinersTest(unittest.TestCase):
 
 
 class TunerTest(unittest.TestCase):
-    """Otomatik OC'yi sahte kartlarla, simüle edilmiş zamanda uçtan uca çalıştırır."""
+    """Kart başına otomatik OC: sahte kartlarla, simüle edilmiş zamanda uçtan uca."""
 
-    def run_tuner(self, preset, model, vendor, start=None):
+    BOUNDS = {"nvidia": {"core_offset": [-1000, 1000], "mem_offset": [-2000, 3000], "power_limit_w": [50, 450], "fan_pct": [0, 100]},
+              "amd": {"core_clock": [300, 2000], "mem_clock": [300, 2500], "core_mv": [700, 1200], "mem_mv": [700, 1100], "fan_pct": [0, 100]}}
+
+    def run_tuner(self, preset, model, vendor, start_by_bus=None, global_crash=False):
+        """global_crash=True: bir kart sınırı aşınca TÜM miner çöker (hangi kart olduğu belli olmaz)."""
         from whisperagent.hw.fake import FakeHardware
         from whisperagent.tuner import Tuner
-        from whisperagent.miners import specs  # noqa: F401
         hw = FakeHardware(preset)
         gpus = hw.scan()
         hw.mining = {g["bus_id"] for g in gpus}
-        bounds = {"nvidia": {"core_offset": [-1000, 1000], "mem_offset": [-2000, 3000], "power_limit_w": [50, 450], "fan_pct": [0, 100]},
-                  "amd": {"core_clock": [300, 2000], "mem_clock": [300, 2500], "core_mv": [700, 1200], "mem_mv": [700, 1100], "fan_pct": [0, 100]}}[vendor]
         t = 1000.0
-        tu = Tuner(1, {"model": model, "vendor": vendor, "algo": "etchash", "temp_limit": 85, "bounds": bounds, "start": start}, gpus, step_sec=60, t=t)
+        payload = {"model": model, "vendor": vendor, "algo": "etchash", "temp_limit": 85, "bounds": self.BOUNDS[vendor],
+                   "per_card": True, "start_by_bus": start_by_bus or {}}
+        tu = Tuner(1, payload, gpus, step_sec=60, t=t)
 
         def apply():
-            for b in tu.targets:
-                hw.oc[b] = tu.wanted_params()
+            for b, p in tu.wanted_params_by_bus().items():
+                hw.oc[b] = p
         apply()
-        for _ in range(2000):
+        restarts = 0
+        for _ in range(5000):
             t += 10
             sens = hw.sensors()
             rows = [{"bus_id": g["bus_id"], **sens[g["bus_id"]], "hashrate": hw.fake_hash(g["bus_id"], 1), "rejected": 0} for g in gpus]
-            tu.feed(rows, True, 0, t=t)
+            crashed = any(r["hashrate"] <= 0 for r in rows)
+            if global_crash and crashed:
+                restarts += 1
+                rows = [dict(r, hashrate=0) for r in rows]
+            tu.feed(rows, not (global_crash and crashed), restarts, t=t)
             act = tu.advance(t)
             if act == "apply":
                 apply()
@@ -176,39 +184,48 @@ class TunerTest(unittest.TestCase):
         self.assertTrue(tu.finished)
         return hw, tu
 
-    def test_p106_finds_stable_memory_and_lower_power(self):
-        hw, tu = self.run_tuner("karma", "NVIDIA P106-100", "nvidia")
-        self.assertIsNone(tu.failed, tu.history)
-        p = tu.result()["params"]
-        sweets = [hw.curve[b]["mem_sweet"] for b in tu.targets]
-        self.assertLessEqual(p["mem_offset"], min(sweets) + 150)        # hiçbir kartı çökertmeyen değer
-        self.assertGreaterEqual(p["mem_offset"], min(sweets) - 300)     # ama tatlı noktaya yakın
-        self.assertIn("power_limit_w", p)
-        self.assertLess(p["power_limit_w"], 82)                          # stok güçten düşük
+    def assert_card_limits(self, hw, tu, vendor):
         r = tu.result()
-        self.assertGreater(r["after"]["hash"] / r["after"]["power"], r["before"]["hash"] / r["before"]["power"])  # verim arttı
-        for b in tu.targets:                                             # önerilen değerle tüm kartlar çalışıyor
-            hw.oc[b] = p
-            self.assertGreater(hw.fake_hash(b, 1), 0)
+        self.assertEqual(len(r["cards"]), len(tu.targets))
+        for c in r["cards"]:
+            cur = hw.curve[c["bus_id"]]
+            p = c["params"]
+            if vendor == "nvidia":
+                self.assertLessEqual(p["mem_offset"], cur["mem_sweet"] + 150, c)   # kartı çökertmeyen değer
+                self.assertGreaterEqual(p["mem_offset"], cur["mem_sweet"] - 200, c)  # kendi tatlı noktasına yakın
+            else:
+                self.assertLessEqual(p["mem_clock"], cur["mclk_sweet"] + 25, c)
+                self.assertGreaterEqual(p["core_mv"], cur["mv_min"], c)
+            hw.oc[c["bus_id"]] = p
+            self.assertGreater(hw.fake_hash(c["bus_id"], 1), 0, c)              # önerilen değerle kart çalışıyor
+        return r
 
-    def test_rx580_memory_and_voltage(self):
+    def test_p106_each_card_gets_its_own_values(self):
+        hw, tu = self.run_tuner("p106", "NVIDIA P106-100", "nvidia")
+        self.assertIsNone(tu.failed)
+        r = self.assert_card_limits(hw, tu, "nvidia")
+        mems = {c["params"]["mem_offset"] for c in r["cards"]}
+        self.assertGreater(len(mems), 1, "kartlar farklı değer almalı")    # tek ortak değer değil
+        self.assertGreater(r["after"]["hash"] / r["after"]["power"], r["before"]["hash"] / r["before"]["power"])
+
+    def test_whole_miner_crash_finds_the_guilty_card(self):
+        hw, tu = self.run_tuner("p106", "NVIDIA P106-100", "nvidia", global_crash=True)
+        self.assertIsNone(tu.failed)
+        r = self.assert_card_limits(hw, tu, "nvidia")
+        self.assertGreater(len({c["params"]["mem_offset"] for c in r["cards"]}), 1)
+
+    def test_rx580_per_card(self):
         hw, tu = self.run_tuner("karma", "AMD Radeon RX 580 8GB", "amd")
-        self.assertIsNone(tu.failed, tu.history)
-        p = tu.result()["params"]
-        for b in tu.targets:
-            c = hw.curve[b]
-            self.assertLessEqual(p["mem_clock"], c["mclk_sweet"] + 25)
-            self.assertGreaterEqual(p["core_mv"], c["mv_min"])
-        self.assertLess(p["core_mv"], 950)
+        self.assertIsNone(tu.failed)
+        self.assert_card_limits(hw, tu, "amd")
 
-    def test_unstable_profile_falls_back_to_safe_start(self):
-        hw, tu = self.run_tuner("p106", "NVIDIA P106-100", "nvidia", start={"mem_offset": 2500})
-        self.assertIsNone(tu.failed, tu.history)
-        r = tu.result()
-        self.assertTrue(r["start_was_unstable"])
-        self.assertLessEqual(r["params"]["mem_offset"], min(hw.curve[b]["mem_sweet"] for b in tu.targets) + 150)
-
-    def test_rx580_with_too_low_voltage_profile(self):
-        hw, tu = self.run_tuner("karma", "AMD Radeon RX 580 8GB", "amd", start={"core_clock": 1150, "mem_clock": 2100, "core_mv": 870})
-        self.assertIsNone(tu.failed, tu.history)
-        self.assertGreaterEqual(tu.result()["params"]["core_mv"], max(hw.curve[b]["mv_min"] for b in tu.targets))
+    def test_unstable_card_profile_falls_back_only_for_that_card(self):
+        hw = __import__("whisperagent.hw.fake", fromlist=["FakeHardware"]).FakeHardware("karma")
+        buses = [g["bus_id"] for g in hw.scan() if g["vendor"] == "amd"]
+        start = {buses[0]: {"core_clock": 1150, "mem_clock": 2100, "core_mv": 800}, buses[1]: {"core_clock": 1150, "mem_clock": 2000, "core_mv": 950}}
+        hw2, tu = self.run_tuner("karma", "AMD Radeon RX 580 8GB", "amd", start_by_bus=start)
+        self.assertIsNone(tu.failed)
+        r = self.assert_card_limits(hw2, tu, "amd")
+        by = {c["bus_id"]: c for c in r["cards"]}
+        self.assertTrue(by[buses[0]]["start_was_unstable"])
+        self.assertFalse(by[buses[1]]["start_was_unstable"])

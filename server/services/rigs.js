@@ -9,6 +9,25 @@ const OC_FIELDS = {
   amd: { core_clock: [300, 2000], mem_clock: [300, 2500], core_mv: [700, 1200], mem_mv: [700, 1100], fan_pct: [0, 100] },
 };
 
+// OC değerlerini sınırlar içinde temizler. Hatalıysa [null, mesaj] döner.
+function cleanOcParams(vendor, input, { clamp = false } = {}) {
+  const fields = OC_FIELDS[vendor];
+  if (!fields || !input || typeof input !== 'object') return [null, 'Geçersiz OC değerleri.'];
+  const params = {};
+  for (const [k, [min, max]] of Object.entries(fields)) {
+    const v = input[k];
+    if (v === undefined || v === null || v === '') continue; // boş = stok
+    let n = Math.round(Number(v));
+    if (!Number.isFinite(n)) return [null, `${k} sayı olmalı.`];
+    if (n < min || n > max) {
+      if (!clamp) return [null, `${k} değeri ${min} ile ${max} arasında olmalı.`];
+      n = Math.min(max, Math.max(min, n));
+    }
+    params[k] = n;
+  }
+  return [params];
+}
+
 // Otomatik OC sonucunu kullanıcının profillerine ekler. Rig'e ATANMAZ: kullanıcı panelden "Uygula" der.
 function saveTunedProfile(userId, r) {
   const vendor = r.vendor === 'amd' ? 'amd' : r.vendor === 'nvidia' ? 'nvidia' : null;
@@ -99,7 +118,7 @@ function buildAgentConfig(rig) {
   return { config_version: rig.config_version, rig_name: rig.name, flight_sheet: flightSheet, overclock };
 }
 
-// Her kart için geçerli OC profili: önce karta özel atama, sonra rig'deki aynı modele atanan profil.
+// Her kart için geçerli OC: önce karta özel değerler, sonra karta atanan profil, sonra rig'deki aynı modele atanan profil.
 // Hiçbiri yoksa (ör. sonradan takılan yeni bir model) stok ayarlar: başka modelin profili asla uygulanmaz.
 function effectiveOc(rigId) {
   const byModel = new Map(all('SELECT model, oc_profile_id FROM rig_oc WHERE rig_id = ?', rigId).map((r) => [r.model, r.oc_profile_id]));
@@ -109,7 +128,11 @@ function effectiveOc(rigId) {
     if (!profiles.has(id)) profiles.set(id, get('SELECT id, name, vendor, params FROM oc_profiles WHERE id = ?', id) || null);
     return profiles.get(id);
   };
-  return all('SELECT id, bus_id, vendor, model, present, oc_profile_id FROM gpus WHERE rig_id = ? ORDER BY idx', rigId).map((g) => {
+  return all('SELECT id, bus_id, vendor, model, present, oc_profile_id, oc_params FROM gpus WHERE rig_id = ? ORDER BY idx', rigId).map((g) => {
+    // Öncelik: karta özel değerler → karta atanmış profil → modele atanmış profil → stok
+    if (g.oc_params) {
+      return { ...g, profile: { id: null, name: 'Karta özel', vendor: g.vendor, params: g.oc_params }, source: 'card' };
+    }
     let p = profile(g.oc_profile_id);
     let source = p ? 'gpu' : null;
     if (!p) { p = profile(byModel.get(g.model)); source = p ? 'model' : null; }
@@ -135,7 +158,7 @@ function rigConfText(rig, secret, publicUrl) {
 }
 
 module.exports = {
-  OC_FIELDS, saveTunedProfile,
+  OC_FIELDS, cleanOcParams, saveTunedProfile,
   rigConfText,
   parseJson, ownedRig, bumpConfig, bumpConfigForFlightSheet, bumpConfigForWallet, bumpConfigForOcProfile,
   flightSheetMiners, buildAgentConfig, effectiveOc,

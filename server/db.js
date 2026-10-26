@@ -260,6 +260,10 @@ const MIGRATIONS = [
   `
   ALTER TABLE rigs ADD COLUMN tune_state TEXT;
   `,
+  // v7: her kartın kendine özel OC değerleri (aynı model kartlar bile farklı değer kaldırır)
+  `
+  ALTER TABLE gpus ADD COLUMN oc_params TEXT;
+  `,
 ];
 
 function migrate() {

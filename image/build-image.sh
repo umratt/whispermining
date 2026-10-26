@@ -10,10 +10,10 @@
 set -euo pipefail
 
 VERSION="${VERSION:-1.0.0}"
-IMG_SIZE="${IMG_SIZE:-7G}"
+IMG_SIZE="${IMG_SIZE:-8G}"
 SUITE=jammy
 MIRROR="${MIRROR:-http://archive.ubuntu.com/ubuntu}"
-NVIDIA_BRANCH="${NVIDIA_BRANCH:-535}"     # GTX 10xx (P106 dahil) → RTX 40xx
+NVIDIA_BRANCH="${NVIDIA_BRANCH:-580}"     # Pascal (GTX 10xx, P106) için son dal; RTX 40xx dahil. Ubuntu 535 paketlerini 580e yönlendiriyor.
 # RX 470/480/570/580 (Polaris) için eski (legacy) OpenCL: AMD 22.x depolarını ve sürücü paketlerini
 # kaldırdı (Ekim 2026'da repo.radeon.com'da en eski 23.20, o da Polaris legacy OpenCL içermiyor).
 # Bu yüzden varsayılan kapalı; amdgpu çekirdek sürücüsü (sensör, fan, OC) yine imajda.
@@ -36,6 +36,8 @@ MNT="$(mktemp -d /tmp/wmroot.XXXX)"
 LOOP=""
 
 log() { echo -e "\n==> $*"; }
+# Çıktıyı gizle ama hata olursa son satırları göster (sebebi loga düşsün)
+quiet() { "$@" > /tmp/wm-step.log 2>&1 || { rc=$?; echo "---- HATA ($rc): $* ----"; tail -40 /tmp/wm-step.log; df -h "$MNT" /tmp | tail -2; return $rc; }; }
 cleanup() {
   set +e
   for d in wmining dev/pts dev proc sys run; do mountpoint -q "$MNT/$d" && umount -l "$MNT/$d"; done
@@ -70,7 +72,7 @@ mkdir -p "$MNT/wmining"
 mount "${LOOP}p1" "$MNT/wmining"
 
 log "Ubuntu $SUITE temel sistem (debootstrap)"
-debootstrap --arch=amd64 --include=systemd-sysv,ca-certificates,gnupg "$SUITE" "$MNT" "$MIRROR" >/dev/null
+quiet debootstrap --arch=amd64 --include=systemd-sysv,ca-certificates,gnupg "$SUITE" "$MNT" "$MIRROR"
 
 cat > "$MNT/etc/apt/sources.list" <<EOF
 deb $MIRROR $SUITE main restricted universe multiverse
@@ -83,15 +85,17 @@ in_chroot() { chroot "$MNT" /usr/bin/env DEBIAN_FRONTEND=noninteractive LANG=C.U
 
 log "Çekirdek, önyükleyici ve araçlar"
 in_chroot apt-get update -qq
-in_chroot apt-get install -y -qq --no-install-recommends \
+quiet in_chroot apt-get install -y -qq --no-install-recommends \
   linux-generic grub-pc-bin grub-efi-amd64-bin grub2-common initramfs-tools \
   python3 pciutils curl ca-certificates cloud-guest-utils fdisk gdisk dosfstools e2fsprogs \
-  netplan.io iproute2 iputils-ping openssh-server sudo kbd console-setup locales tzdata less nano >/dev/null
+  netplan.io iproute2 iputils-ping openssh-server sudo kbd console-setup locales tzdata less nano
 
 log "NVIDIA $NVIDIA_BRANCH sürücüsü (Ubuntu'nun hazır derlenmiş modülleriyle; DKMS yok)"
-in_chroot apt-get install -y -qq --no-install-recommends \
+# Not: Ekim 2026'da Ubuntu 535 paketlerini 580'e yönlendiren geçiş paketlerine çevirdi; 535 seçilirse iki sürücü
+# birden kurulup imaj dolar. 580 tek başına temiz kuruluyor (WSL'de apt -s ile doğrulandı).
+quiet in_chroot apt-get install -y -qq --no-install-recommends \
   "linux-modules-nvidia-$NVIDIA_BRANCH-generic" "nvidia-utils-$NVIDIA_BRANCH" "nvidia-compute-utils-$NVIDIA_BRANCH" \
-  "libnvidia-compute-$NVIDIA_BRANCH" "xserver-xorg-video-nvidia-$NVIDIA_BRANCH" nvidia-settings xserver-xorg-core >/dev/null
+  "libnvidia-compute-$NVIDIA_BRANCH" "xserver-xorg-video-nvidia-$NVIDIA_BRANCH" nvidia-settings xserver-xorg-core
 
 if [ "$WITH_AMD_ROCM" = "1" ]; then
   log "AMD ROCm $ROCM_VERSION OpenCL (Polaris için deneysel)"
@@ -99,7 +103,7 @@ if [ "$WITH_AMD_ROCM" = "1" ]; then
   curl -fsSL https://repo.radeon.com/rocm/rocm.gpg.key | gpg --dearmor > "$MNT/etc/apt/keyrings/rocm.gpg"
   echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/$ROCM_VERSION jammy main"     > "$MNT/etc/apt/sources.list.d/rocm.list"
   in_chroot apt-get update -qq   # imza doğrulanmazsa apt burada durur (set -e)
-  in_chroot apt-get install -y -qq --no-install-recommends rocm-opencl-runtime ocl-icd-libopencl1 clinfo >/dev/null
+  quiet in_chroot apt-get install -y -qq --no-install-recommends rocm-opencl-runtime ocl-icd-libopencl1 clinfo
   in_chroot dpkg-query -W -f='${Package} ${Version}
 ' rocm-opencl rocm-core hsa-rocr comgr
   ls "$MNT/etc/OpenCL/vendors/"
@@ -112,12 +116,12 @@ if [ "$WITH_AMD_OPENCL" = "1" ]; then
   log "AMD OpenCL (Polaris için legacy)"
   curl -fsSL -o "$MNT/tmp/amdgpu-install.deb" "$AMDGPU_INSTALL_URL"
   # Sadece depo tanımlarını almak için; amdgpu-install aracını çalıştırmıyoruz (legacy + DKMS'siz desteklemiyor).
-  in_chroot apt-get install -y -qq /tmp/amdgpu-install.deb >/dev/null
+  quiet in_chroot apt-get install -y -qq /tmp/amdgpu-install.deb
   rm -f "$MNT/tmp/amdgpu-install.deb"
   ls "$MNT/etc/apt/sources.list.d/"
   in_chroot apt-get update -qq
   # Legacy OpenCL kullanıcı alanı kütüphanesi Ubuntu'nun kendi amdgpu çekirdek sürücüsüyle çalışır (DKMS gerekmez)
-  in_chroot apt-get install -y -qq --no-install-recommends opencl-legacy-amdgpu-pro-icd ocl-icd-libopencl1 clinfo >/dev/null
+  quiet in_chroot apt-get install -y -qq --no-install-recommends opencl-legacy-amdgpu-pro-icd ocl-icd-libopencl1 clinfo
   in_chroot dpkg -l | grep -E "opencl-legacy|amdgpu-dkms" || true
   if in_chroot dpkg-query -W -f='${Status}' amdgpu-dkms 2>/dev/null | grep -q "ok installed"; then echo "HATA: amdgpu-dkms kuruldu (istenmiyordu)"; exit 1; fi
 fi

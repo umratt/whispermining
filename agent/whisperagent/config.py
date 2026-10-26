@@ -7,8 +7,8 @@ import os
 DEFAULT_CONF_PATHS = ["/wmining/rig.conf"]
 DEFAULT_SERVER_URL = "https://www.whisperkripto.com/mining"
 
-STATE_DIR = os.environ.get("WM_STATE_DIR", "/var/lib/wmining")  # flash üzerinde, kalıcı
-RUN_DIR = os.environ.get("WM_RUN_DIR", "/run/wmining")          # RAM'de: loglar, durum dosyası
+STATE_DIR = os.path.abspath(os.environ.get("WM_STATE_DIR", "/var/lib/wmining"))  # flash üzerinde, kalıcı
+RUN_DIR = os.path.abspath(os.environ.get("WM_RUN_DIR", "/run/wmining"))         # RAM'de: loglar, durum dosyası
 
 
 def conf_path():
