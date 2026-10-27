@@ -181,8 +181,8 @@ class RemoteConsoleTest(unittest.TestCase):
     def test_diag_runs_fixed_argv(self):
         from unittest import mock
         a = self.agent()
-        fake = mock.Mock(returncode=0, stdout="01:00.0 VGA compatible controller: NVIDIA\n02:00.0 USB controller\n", stderr="")
-        with mock.patch("subprocess.run", return_value=fake) as run:
+        fake = (0, "01:00.0 VGA compatible controller: NVIDIA\n02:00.0 USB controller\n")
+        with mock.patch("whisperagent.agent.run", return_value=fake) as run:
             st, _code, out = a.console_exec("lspci")
         run.assert_called_once()
         self.assertEqual(run.call_args[0][0], ["lspci"])
@@ -369,3 +369,42 @@ class TunerTest(unittest.TestCase):
         by = {c["bus_id"]: c for c in r["cards"]}
         self.assertTrue(by[buses[0]]["start_was_unstable"])
         self.assertFalse(by[buses[1]]["start_was_unstable"])
+
+
+class HangTest(unittest.TestCase):
+    """Sürücüsü takılan kartta nvidia-smi asılı kalır: agent kilitlenmemeli, sebebi panele yazmalı."""
+
+    def test_run_timeout_returns(self):
+        from whisperagent.util import run
+        t = time.monotonic()
+        code, _out = run([sys.executable, "-c", "import time; time.sleep(30)"], timeout=1)
+        self.assertEqual(code, 124)
+        self.assertLess(time.monotonic() - t, 10)
+
+    def test_nvidia_backoff_and_problem(self):
+        from unittest import mock
+        from whisperagent.hw import nvidia
+        nvidia._state.update(skip_until=0.0, problem=None)
+        with mock.patch.object(nvidia, "run", return_value=(124, "nvidia-smi zaman aşımı")) as run:
+            self.assertEqual(nvidia.scan(), [])
+            self.assertEqual(nvidia.sensors(), {})  # bekleme süresinde tekrar çağrılmaz
+            self.assertEqual(run.call_count, 1)
+        dmesg = "[  5.1] NVRM: BAR1 is 0M @ 0x0 (PCI:0000:03:00.0)\n[  5.2] NVRM: The NVIDIA probe routine failed\n"
+        with mock.patch.object(nvidia, "pci_count", return_value=6), mock.patch.object(nvidia, "run", return_value=(0, dmesg)):
+            msg = nvidia.problem(0)
+        self.assertIn("6 NVIDIA kart takılı, 0 tanesi çalışıyor", msg)
+        self.assertIn("BAR1 is 0M", msg)
+        self.assertIn("Above 4G", msg)
+        with mock.patch.object(nvidia, "pci_count", return_value=0):
+            self.assertIsNone(nvidia.problem(0))  # AMD'li rig: NVIDIA yoksa sorun da yok
+        nvidia._state.update(skip_until=0.0, problem=None)
+
+    def test_hang_guard_exits(self):
+        from unittest import mock
+        from whisperagent import agent as agent_mod
+        a = agent_mod.Agent.__new__(agent_mod.Agent)
+        a.alive_at = time.monotonic() - agent_mod.HANG_LIMIT_SEC - 1
+        with mock.patch.object(agent_mod.time, "sleep"), mock.patch.object(agent_mod.os, "_exit", side_effect=SystemExit(3)) as ex:
+            with self.assertRaises(SystemExit):
+                a.hang_guard()
+        ex.assert_called_once_with(3)

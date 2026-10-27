@@ -5,6 +5,7 @@ import os
 import re
 import socket
 import subprocess
+import threading
 import time
 
 from . import VERSION, config, console, display, oc, updater
@@ -12,8 +13,9 @@ from .tuner import Tuner
 from .api import Api, ApiError
 from .hw import backend
 from .miners import SPECS, MinerError, MinerProcess, download_miner
-from .util import log
+from .util import log, run
 
+HANG_LIMIT_SEC = 20 * 60  # miner indirme yavaş internette uzun sürebilir; bundan uzun takılma gerçek kilitlenmedir
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\r")
 
 # Bazı algoritmalar her kartta çalışmaz. Pearl (pearlhash) tensor çekirdeği ister: NVIDIA RTX 20 ve sonrası,
@@ -68,7 +70,9 @@ class Agent:
         self.miners = []          # [(spec, MinerProcess, gpus)]
         self.miner_state = "stopped"
         self.error = None
+        self.hw_problem = None     # takılı ama sürücünün göremediği kart varsa açıklaması
         self.download_retry_at = 0
+        self.alive_at = time.monotonic()  # ana döngünün son ilerlediği an (bekçi için)
         self.last_hw_scan = 0
         self.next_update_check = time.monotonic() + 120
         self.view = {"server": self.server}
@@ -122,6 +126,12 @@ class Agent:
         changed = [g["bus_id"] + g["model"] for g in gpus] != [g["bus_id"] + g["model"] for g in self.gpus]
         self.gpus = gpus
         self.last_hw_scan = time.monotonic()
+        problem = getattr(self.hw, "problem", None)
+        hw_problem = problem(gpus) if problem else None
+        if hw_problem != self.hw_problem:
+            if hw_problem:
+                log.error("Kart sorunu: %s", hw_problem)
+            self.hw_problem = hw_problem
         if changed or force:
             log.info("Kartlar: %s", ", ".join(f"{g['bus_id']} {g['model']}" for g in gpus) or "yok")
             self.api.hardware(self.hardware_payload())
@@ -318,18 +328,19 @@ class Agent:
         argv = self.DIAG.get(cmd)
         if not argv:
             return "failed", 1, f"Bilinmeyen komut: {cmd}"
-        try:
-            r = subprocess.run(argv, capture_output=True, text=True, timeout=20, check=False)
-        except FileNotFoundError:
+        code, out = run(argv, timeout=20)  # takılan nvidia-smi agent'ı kilitlemesin
+        if code == 127:
             return "failed", 1, f"{argv[0]} bu sistemde yok"
-        except subprocess.TimeoutExpired:
-            return "failed", 1, f"{cmd} 20 sn içinde bitmedi"
-        out = ANSI.sub("", (r.stdout or "") + (r.stderr or ""))
+        if code == 124:
+            return "failed", 1, f"{cmd} 20 sn içinde bitmedi (sürücü yanıt vermiyor olabilir)"
+        out = ANSI.sub("", out)
         if cmd == "lspci":
             out = "\n".join(l for l in out.splitlines() if any(k in l for k in ("VGA", "3D", "Display"))) or out
         if cmd == "dmesg":
-            out = "\n".join(out.splitlines()[-40:])
-        return ("done" if r.returncode == 0 else "failed"), r.returncode, out[-11000:] or "(çıktı yok)"
+            lines = out.splitlines()
+            gpu = [l for l in lines if re.search(r"NVRM|nvidia|amdgpu|BAR \d|no space for|can't claim", l, re.I)]
+            out = "\n".join(gpu[-40:] + ["── son satırlar ──"] + lines[-20:]) if gpu else "\n".join(lines[-40:])
+        return ("done" if code == 0 else "failed"), code, out[-11000:] or "(çıktı yok)"
 
     def reboot_now(self):
         self.stop_miners()
@@ -442,7 +453,7 @@ class Agent:
         uptime = min((p.uptime() for _s, p, _g in self.miners), default=0)
         sysinfo = self.hw.system()
         self.view["gpus"] = [{**g, **r} for g, r in zip(self.gpus, rows)]
-        return {"miner": {"status": self.miner_state, "uptime_sec": uptime, "error": self.error},
+        return {"miner": {"status": self.miner_state, "uptime_sec": uptime, "error": self.error or self.hw_problem},
                 "system": {"cpu_load": sysinfo.get("cpu_load"), "ram_used_mb": sysinfo.get("ram_used_mb")},
                 "gpus": rows}
 
@@ -560,7 +571,7 @@ class Agent:
         self.view["uptime"] = min((p.uptime() for _s, p, _g in self.miners), default=0)
         self.view["miner"] = {"running": "çalışıyor", "starting": "başlıyor", "downloading": "indiriliyor",
                               "stopped": "durduruldu", "error": "hata"}.get(self.miner_state, self.miner_state)
-        self.view["error"] = self.error
+        self.view["error"] = self.error or self.hw_problem
         self.view["tune"] = self.tuner.status() if self.tuner else None
         display.show(self.view)
 
@@ -584,7 +595,7 @@ class Agent:
         waited = 0
         while not config.conf_partition_ready():
             if waited % 15 == 0:
-                subprocess.run(["mount", config.FAT_MOUNT], capture_output=True, check=False)
+                run(["mount", config.FAT_MOUNT], timeout=30)
             if waited >= 30:
                 self.error = "WMINING bölümü bulunamadı: flash bellek düzgün yazılmamış ya da bozuk olabilir."
                 self.view["connection"] = "WMINING bölümü bekleniyor"
@@ -594,6 +605,7 @@ class Agent:
                     log.error(self.error)
             time.sleep(1)
             waited += 1
+            self.alive_at = time.monotonic()  # bilerek bekliyoruz: bekçi saymasın
         if waited:
             log.info("WMINING bölümü %d sn sonra hazır", waited)
             self.error = None
@@ -607,7 +619,17 @@ class Agent:
             self.api = Api(self.server)
         self.view["server"] = self.server
 
+    def hang_guard(self):
+        """Ana döngü uzun süre ilerlemezse (çekirdekte takılan bir komut gibi) süreci bitir; systemd yeniden başlatır."""
+        while True:
+            time.sleep(30)
+            stuck = time.monotonic() - self.alive_at
+            if stuck > HANG_LIMIT_SEC:
+                log.error("Ana döngü %d sn'dir ilerlemiyor; agent yeniden başlatılıyor", stuck)
+                os._exit(3)
+
     def run(self):
+        threading.Thread(target=self.hang_guard, name="hang-guard", daemon=True).start()
         if not self.fake:
             console.provision()  # wm / miner / sreboot komutları ve tty2 konsolu (eski imajlara da gelsin)
         self.wait_conf_partition()
@@ -617,6 +639,7 @@ class Agent:
                 if not self.api.rig_id:
                     self.identity()
                 self.tick()
+                self.alive_at = time.monotonic()
                 backoff = 5
             except ApiError as e:
                 if e.status == 401:
@@ -626,6 +649,7 @@ class Agent:
                 self.view["connection"] = f"hata ({e.status})"
                 display.show(self.view)
                 time.sleep(backoff)
+                self.alive_at = time.monotonic()
                 backoff = min(60, backoff * 2)
             except OSError as e:  # ağ yok, DNS hatası, zaman aşımı
                 log.warning("Bağlantı yok: %s", e)
@@ -634,6 +658,7 @@ class Agent:
                 for _ in range(backoff):
                     self.watchdog()  # internet gitse de madencilik sürsün
                     time.sleep(1)
+                self.alive_at = time.monotonic()
                 backoff = min(60, backoff * 2)
 
 

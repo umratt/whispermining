@@ -24,6 +24,10 @@ class RealHardware:
             g["index"] = i  # panel sırası: PCI adresine göre
         return gpus
 
+    def problem(self, gpus):
+        """Takılı olup çalışmayan kart varsa açıklaması, yoksa None."""
+        return nvidia.problem(sum(1 for g in gpus if g["vendor"] == "nvidia"))
+
     def sensors(self):
         out = nvidia.sensors()
         out.update(amd.sensors())

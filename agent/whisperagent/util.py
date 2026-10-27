@@ -5,14 +5,25 @@ log = logging.getLogger("whisperagent")
 
 
 def run(cmd, timeout=20, env=None, check=False):
-    """Komutu çalıştır, (dönüş kodu, çıktı) döndür. Program yoksa (127, mesaj)."""
+    """Komutu çalıştır, (dönüş kodu, çıktı) döndür. Program yoksa (127, mesaj).
+
+    Zaman aşımında süreç öldürülür ve en fazla birkaç saniye beklenir: sürücüsü takılmış bir kartta nvidia-smi
+    çekirdekte (D durumunda) asılı kalır ve öldürülemez; subprocess.run onu sonsuza kadar bekleyip agent'ı kilitlerdi.
+    """
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
     except FileNotFoundError:
         return 127, f"{cmd[0]} bulunamadı"
+    try:
+        stdout, stderr = p.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
+        p.kill()
+        try:
+            p.communicate(timeout=3)
+        except subprocess.TimeoutExpired:
+            log.warning("%s öldürülemedi (çekirdekte takılı); beklemeden devam ediliyor", cmd[0])
         return 124, f"{cmd[0]} zaman aşımı"
-    out = (p.stdout or "") + (p.stderr or "")
+    out = (stdout or "") + (stderr or "")
     if check and p.returncode != 0:
         raise RuntimeError(f"{' '.join(cmd)} → {p.returncode}: {out.strip()[:300]}")
     return p.returncode, out
