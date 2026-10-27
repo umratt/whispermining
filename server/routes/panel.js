@@ -6,6 +6,7 @@ const config = require('../config');
 const sec = require('../security');
 const rigsSvc = require('../services/rigs');
 const vault = require('../services/confvault');
+const telegram = require('../services/telegram');
 const { COMMAND_TYPES } = require('./agent');
 
 const router = express.Router();
@@ -60,7 +61,27 @@ router.get('/me', (req, res) => {
   const u = get('SELECT id, email, is_admin, telegram_chat_id, temp_limit, hashrate_drop_pct, offline_after_sec FROM users WHERE id = ?', req.user.id);
   const openAlerts = get(`SELECT COUNT(*) AS n FROM alerts a JOIN rigs r ON r.id = a.rig_id
                           WHERE r.owner_id = ? AND a.resolved_at IS NULL`, req.user.id).n;
-  res.json({ ...u, is_admin: !!u.is_admin, csrf: req.session.csrf, open_alerts: openAlerts, telegram_enabled: !!config.telegramBotToken });
+  const tg = telegram.bot();
+  res.json({ ...u, is_admin: !!u.is_admin, csrf: req.session.csrf, open_alerts: openAlerts,
+    telegram_enabled: !!tg.token, telegram_bot: tg.username });
+});
+
+// ---- Telegram ----
+router.put('/admin/telegram', sec.requireAdmin, async (req, res) => {
+  try { res.json({ ok: true, username: await telegram.setToken(req.body.token) }); } catch (err) { bad(res, err.message); }
+});
+router.delete('/admin/telegram', sec.requireAdmin, (_req, res) => { telegram.clearToken(); res.json({ ok: true }); });
+router.post('/me/telegram/link', (req, res) => {
+  try { res.json({ ok: true, ...telegram.startLink(req.user.id) }); } catch (err) { bad(res, err.message); }
+});
+router.post('/me/telegram/test', sec.rateLimit({ windowSec: 60, max: 5, key: (req) => `tgtest:${req.user.id}` }), async (req, res) => {
+  const u = get('SELECT telegram_chat_id FROM users WHERE id = ?', req.user.id);
+  if (!u.telegram_chat_id) return bad(res, "Önce Telegram'ı bağlayın.");
+  try { await telegram.send(u.telegram_chat_id, '🔔 WhisperMining test mesajı: bildirimler çalışıyor.'); res.json({ ok: true }); } catch (err) { bad(res, `Gönderilemedi: ${err.message}`); }
+});
+router.delete('/me/telegram', (req, res) => {
+  run('UPDATE users SET telegram_chat_id = NULL WHERE id = ?', req.user.id);
+  res.json({ ok: true });
 });
 
 router.put('/me/settings', (req, res) => {
@@ -71,10 +92,12 @@ router.put('/me/settings', (req, res) => {
   if (!(tempLimit >= 50 && tempLimit <= 100)) return bad(res, 'Sıcaklık sınırı 50–100°C arası olmalı.');
   if (!(drop >= 5 && drop <= 90)) return bad(res, 'Hashrate düşüş eşiği %5–90 arası olmalı.');
   if (!(offline >= 60 && offline <= 3600)) return bad(res, 'Çevrimdışı süresi 60–3600 saniye arası olmalı.');
-  const chat = str(b.telegram_chat_id, 40);
-  if (chat && !/^-?\d+$/.test(chat)) return bad(res, 'Telegram chat ID sadece rakamlardan oluşmalı.');
-  run('UPDATE users SET temp_limit=?, hashrate_drop_pct=?, offline_after_sec=?, telegram_chat_id=? WHERE id=?',
-    tempLimit, drop, offline, chat || null, req.user.id);
+  run('UPDATE users SET temp_limit=?, hashrate_drop_pct=?, offline_after_sec=? WHERE id=?', tempLimit, drop, offline, req.user.id);
+  if (b.telegram_chat_id !== undefined) { // elle girilen sohbet kimliği (isteğe bağlı)
+    const chat = str(b.telegram_chat_id, 40);
+    if (chat && !/^-?\d+$/.test(chat)) return bad(res, 'Telegram chat ID sadece rakamlardan oluşmalı.');
+    run('UPDATE users SET telegram_chat_id=? WHERE id=?', chat || null, req.user.id);
+  }
   res.json({ ok: true });
 });
 

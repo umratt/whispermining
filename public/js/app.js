@@ -165,7 +165,8 @@ document.addEventListener('click', async (e) => {
   const a = e.target.closest('a[href]');
   if (!a || a.target || e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return;
   const href = a.getAttribute('href');
-  if (/^(https?:|mailto:|#)/.test(href)) return;
+  // Dosya indirmeleri (rig.conf, imaj) sayfa geçişi değil: tarayıcı kendisi indirsin
+  if (/^(https?:|mailto:|#)/.test(href) || a.hasAttribute('download') || /^(api|downloads)\//.test(href)) return;
   e.preventDefault();
   navigate(href);
 });

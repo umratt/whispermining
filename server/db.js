@@ -268,6 +268,10 @@ const MIGRATIONS = [
   `
   ALTER TABLE rigs ADD COLUMN secret_enc TEXT;
   `,
+  // v9: panelden değiştirilebilen sunucu ayarları (ör. Telegram bot anahtarı, şifreli)
+  `
+  CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT);
+  `,
 ];
 
 function migrate() {
