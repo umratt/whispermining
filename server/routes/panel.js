@@ -523,7 +523,9 @@ router.post('/wallets', (req, res) => {
   const [w, err] = walletInput(req.body);
   if (!w) return bad(res, err);
   const r = run('INSERT INTO wallets (user_id, coin, name, address, created_at) VALUES (?,?,?,?,?)', req.user.id, w.coin, w.name, w.address, now());
-  res.json({ ok: true, id: Number(r.lastInsertRowid) });
+  // Bilinen coin'se havuzu ve miner'ı seçilmiş flight sheet kendiliğinden hazırlanır ("Oto · COIN")
+  const created = autoswitch.ensureSheets(req.user.id);
+  res.json({ ok: true, id: Number(r.lastInsertRowid), flight_sheets_created: created });
 });
 
 router.put('/wallets/:id', (req, res) => {

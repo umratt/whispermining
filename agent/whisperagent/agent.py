@@ -21,8 +21,12 @@ ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\r")
 ALGO_CARDS = {
     "pearl": lambda g: (g["vendor"] == "nvidia" and not re.search(r"P10[0246]|GTX (9|10)\d\d|TITAN X|Quadro P", g["model"], re.I))
     or (g["vendor"] == "amd" and bool(re.search(r"RX 6[6-9]\d\d", g["model"]))),
+    # Quantus (QPoW): NVIDIA RTX 30 ve sonrası, AMD RDNA (RX 6000/7000/9000)
+    "quantus": lambda g: (g["vendor"] == "nvidia" and bool(re.search(r"RTX [3-9]\d{3}|RTX A\d|\b[AHLB]\d{2,3}\b", g["model"], re.I)))
+    or (g["vendor"] == "amd" and bool(re.search(r"RX [679]\d{3}", g["model"]))),
 }
-ALGO_NAMES = {"pearl": "Pearl (RTX 20 ve üstü NVIDIA ya da RX 6600–6950 gerekir)"}
+ALGO_NAMES = {"pearl": "Pearl (RTX 20 ve üstü NVIDIA ya da RX 6600–6950 gerekir)",
+              "quantus": "Quantus (RTX 30 ve üstü NVIDIA ya da RX 6000 ve üstü AMD gerekir)"}
 
 
 def algo_supported(algo, gpu):

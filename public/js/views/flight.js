@@ -15,18 +15,22 @@ const POOLS = {
   FIRO: [['WoolyPooly', 'pool.woolypooly.com:3104']],
   // Pearl kendi stratum protokolünü kullanır: portun açık olduğu doğrulandı (standart el sıkışmaya yanıt vermez)
   PRL: [['Kryptex', 'prl.kryptex.network:7048'], ['Kryptex Avrupa', 'prl-eu.kryptex.network:7048']],
+  // Quantus da kendi protokolünü kullanır: portun açık olduğu doğrulandı
+  QUANTUS: [['Kryptex', 'qtc.kryptex.network:7049'], ['Kryptex Avrupa', 'qtc-eu.kryptex.network:7049']],
 };
 POOLS.PEARL = POOLS.PRL; // cüzdan "Pearl" diye eklenmiş olabilir
 // Her kartta çalışmayan algoritmalar için formda uyarı
 const ALGO_NOTES = {
   pearl: 'Pearl sadece NVIDIA RTX 20 ve üstü (ve AMD RX 6600–6950) kartlarda çalışır. P106-100, GTX 10xx ve RX 580 bu coin\'i kazamaz; '
     + 'karışık rig\'de o kartlar boşta kalır. Miner: BzMiner ya da SRBMiner-Multi.',
+  quantus: 'Quantus sadece NVIDIA RTX 30 ve üstü ile AMD RX 6000 ve üstü kartlarda çalışır. P106-100, GTX 10xx, RTX 20xx ve RX 580 kazamaz; '
+    + 'karışık rig\'de o kartlar boşta kalır. Miner: SRBMiner-Multi ya da BzMiner.',
 };
 const poolUrl = (hp) => `stratum+tcp://${hp}`;
 const KNOWN_POOLS = new Set(Object.values(POOLS).flat().map(([, hp]) => poolUrl(hp)));
 // [coin, algoritma, önerilen havuz]
 const COINS = [['ETC', 'etchash'], ['RVN', 'kawpow'], ['ERG', 'autolykos2'], ['CFX', 'octopus'], ['FIRO', 'firopow'],
-  ['KAS', 'kaspa'], ['ALPH', 'alephium'], ['BEAM', 'beamhash'], ['PRL', 'pearl'], ['PEARL', 'pearl']].map(([c, a]) => [c, a, POOLS[c] ? poolUrl(POOLS[c][0][1]) : undefined]);
+  ['KAS', 'kaspa'], ['ALPH', 'alephium'], ['BEAM', 'beamhash'], ['PRL', 'pearl'], ['PEARL', 'pearl'], ['QUANTUS', 'quantus']].map(([c, a]) => [c, a, POOLS[c] ? poolUrl(POOLS[c][0][1]) : undefined]);
 const coinInfo = (c) => COINS.find(([k]) => k === String(c || '').trim().toUpperCase());
 const poolOptions = (coin) => {
   const list = POOLS[String(coin || '').trim().toUpperCase()] || [];
@@ -112,8 +116,10 @@ export async function flightView(el) {
           <div class="field full"><label>Adres</label><input class="input mono" name="address" value="${w?.address || ''}" maxlength="200" spellcheck="false" required></div>
         </div>`,
       onSubmit: async (form) => {
-        await api(w ? `wallets/${w.id}` : 'wallets', { method: w ? 'PUT' : 'POST', body: formData(form) });
-        toast('Cüzdan kaydedildi.');
+        const r = await api(w ? `wallets/${w.id}` : 'wallets', { method: w ? 'PUT' : 'POST', body: formData(form) });
+        const made = r.flight_sheets_created || [];
+        toast(made.length ? `Cüzdan kaydedildi. Havuzu ve miner'ı seçilmiş flight sheet hazırlandı: ${made.map((c) => `Oto · ${c}`).join(', ')}`
+          : 'Cüzdan kaydedildi.');
         load();
       },
     });

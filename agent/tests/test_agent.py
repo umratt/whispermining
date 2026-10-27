@@ -210,6 +210,22 @@ class PearlTest(unittest.TestCase):
         a = SPECS["srbminer"].args(fs, {}, NV)
         self.assertEqual(a[a.index("--algorithm") + 1], "pearlhash")
 
+
+class QuantusTest(unittest.TestCase):
+    def test_cards_and_algo_names(self):
+        from whisperagent.agent import algo_supported
+        ok = lambda m, v="nvidia": algo_supported("quantus", {"model": m, "vendor": v})
+        self.assertTrue(ok("NVIDIA GeForce RTX 3080"))
+        self.assertFalse(ok("NVIDIA GeForce RTX 2080"))
+        self.assertFalse(ok("NVIDIA P106-100"))
+        self.assertFalse(ok("AMD Radeon RX 580 8GB", "amd"))
+        self.assertTrue(ok("AMD Radeon RX 6700 XT", "amd"))
+        fs = dict(FS, algo="quantus")
+        a = SPECS["srbminer"].args(fs, {}, NV)
+        self.assertEqual(a[a.index("--algorithm") + 1], "quantus")
+        a = SPECS["bzminer"].args(fs, {}, NV)
+        self.assertEqual(a[a.index("-a") + 1], "quantus")
+
 if __name__ == "__main__":
     unittest.main()
 

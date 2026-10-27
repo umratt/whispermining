@@ -18,9 +18,12 @@ const DEFAULT_POOL = {
   ETC: 'stratum+tcp://etc.2miners.com:1010', RVN: 'stratum+tcp://rvn.2miners.com:6060', ERG: 'stratum+tcp://erg.2miners.com:8888',
   KAS: 'stratum+tcp://kas.2miners.com:2020', ALPH: 'stratum+tcp://alephium.herominers.com:1199',
   CFX: 'stratum+tcp://conflux.herominers.com:1170', FIRO: 'stratum+tcp://pool.woolypooly.com:3104',
-  PRL: 'stratum+tcp://prl.kryptex.network:7048',
+  PRL: 'stratum+tcp://prl.kryptex.network:7048', QUANTUS: 'stratum+tcp://qtc.kryptex.network:7049',
 };
-const ALIAS = { PEARL: 'PRL' };
+// Coin → bizim algoritma adı (flight sheet'i kendiliğinden kurmak için; ağ bağlantısı gerekmez)
+const COIN_ALGO = { ETC: 'etchash', RVN: 'kawpow', ERG: 'autolykos2', KAS: 'kaspa', ALPH: 'alephium', CFX: 'octopus',
+  FIRO: 'firopow', PRL: 'pearl', QUANTUS: 'quantus' };
+const ALIAS = { PEARL: 'PRL', QUAN: 'QUANTUS' };
 const tagOf = (coin) => ALIAS[String(coin || '').toUpperCase()] || String(coin || '').toUpperCase();
 
 function state(userId) {
@@ -35,13 +38,13 @@ function saveState(userId, s) {
 }
 
 // Cüzdanı olan ama flight sheet'i olmayan coin'ler için hazır flight sheet (havuz + her iki kart türünü kazan miner)
-function ensureSheets(userId, rankingCoins) {
+function ensureSheets(userId) {
   const sheets = all('SELECT coin FROM flight_sheets WHERE user_id = ?', userId).map((f) => tagOf(f.coin));
   const created = [];
   for (const w of all('SELECT id, coin FROM wallets WHERE user_id = ?', userId)) {
     const tag = tagOf(w.coin);
     if (sheets.includes(tag) || !DEFAULT_POOL[tag]) continue;
-    const algo = rankingCoins.get(tag);
+    const algo = COIN_ALGO[tag];
     if (!algo) continue;
     const mv = all(`SELECT mv.id, mv.algos, m.supports_nvidia, m.supports_amd FROM miner_versions mv JOIN miners m ON m.id = mv.miner_id
                     WHERE mv.is_default = 1 AND COALESCE(mv.sha256, '') != '' ORDER BY (m.supports_nvidia + m.supports_amd) DESC, m.id`)
@@ -66,10 +69,7 @@ async function evaluate(userId) {
   const models = all(`SELECT g.model, COUNT(*) AS count FROM gpus g JOIN rigs r ON r.id = g.rig_id
                       WHERE r.owner_id = ? AND g.present = 1 GROUP BY g.model`, userId);
   const rk = await profit.ranking(models);
-  // Coin etiketi → bizim algoritma (sadece panelden kazılabilen coin'ler)
-  const coinAlgo = new Map();
-  for (const c of rk.cards) for (const r of c.rows) if (r.our_algo) coinAlgo.set(r.tag, r.our_algo);
-  const created = s.enabled ? ensureSheets(userId, coinAlgo) : [];
+  const created = ensureSheets(userId); // cüzdanı olup flight sheet'i olmayan coin'ler
   const elecUsd = (w) => (w ? (w * 24 / 1000) * Number(s.power_price || 0) / rk.usd_try : 0);
   const sheets = all('SELECT id, name, coin, algo, wallet_id FROM flight_sheets WHERE user_id = ? AND wallet_id IS NOT NULL', userId);
   const candidates = sheets.map((f) => {
@@ -142,4 +142,4 @@ function start() {
   setInterval(tick, CHECK_MS).unref?.();
 }
 
-module.exports = { evaluate, check, state, start, MIN_GAIN, MIN_HOLD_SEC };
+module.exports = { evaluate, check, state, start, ensureSheets, MIN_GAIN, MIN_HOLD_SEC };
