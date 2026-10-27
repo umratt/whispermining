@@ -1,9 +1,12 @@
 import { api, html, icon, openDialog, confirmDialog, toast, formData } from '../lib.js';
 
+// [coin, algoritma, önerilen havuz]
 const COINS = [
-  ['ETC', 'etchash'], ['RVN', 'kawpow'], ['ERG', 'autolykos2'], ['CFX', 'octopus'], ['FIRO', 'firopow'],
+  ['ETC', 'etchash', 'stratum+tcp://etc.2miners.com:1010'], ['RVN', 'kawpow', 'stratum+tcp://rvn.2miners.com:6060'],
+  ['ERG', 'autolykos2', 'stratum+tcp://erg.2miners.com:8888'], ['CFX', 'octopus'], ['FIRO', 'firopow', 'stratum+tcp://firo.2miners.com:8181'],
   ['KAS', 'kaspa'], ['ALPH', 'alephium'], ['BEAM', 'beamhash'],
 ];
+const coinInfo = (c) => COINS.find(([k]) => k === String(c || '').trim().toUpperCase());
 const VENDOR_LABEL = { all: 'Tüm kartlar', nvidia: 'Sadece NVIDIA', amd: 'Sadece AMD' };
 
 export async function flightView(el) {
@@ -92,7 +95,7 @@ export async function flightView(el) {
 
   function minerRow(versions, m = {}) {
     return html`<div class="miner-row" data-miner-row>
-      <div class="field wide"><label>Miner</label><select name="mv">${versions.map((v) => html`<option value="${v.id}" ${v.id === m.miner_version_id ? 'selected' : ''}>${v.label}</option>`)}</select></div>
+      <div class="field wide"><label>Miner</label><select name="mv">${versions.map((v) => html`<option value="${v.id}" data-label="${v.label}" ${v.id === m.miner_version_id ? 'selected' : ''}>${v.label}</option>`)}</select></div>
       <div class="field"><label>Kartlar</label><select name="vendor">${Object.entries(VENDOR_LABEL).map(([k, l]) => html`<option value="${k}" ${k === (m.gpu_vendor || 'all') ? 'selected' : ''}>${l}</option>`)}</select></div>
       <div class="field"><label>Ek parametreler</label><input class="input mono" name="args" value="${m.extra_args || ''}" placeholder="isteğe bağlı"></div>
       <button type="button" class="btn icon danger" data-row-del aria-label="Kaldır">${icon('x')}</button>
@@ -102,20 +105,24 @@ export async function flightView(el) {
   function sheetDialog({ wallets, miners }, f) {
     const versions = miners.flatMap((m) => m.versions.map((v) => ({
       id: v.id, label: `${m.name} ${v.version} (${[m.supports_nvidia && 'NVIDIA', m.supports_amd && 'AMD'].filter(Boolean).join(' + ')})${v.sha256 ? '' : ' — SHA yok'}`,
+      algos: (v.algos || '').split(',').filter(Boolean),
     })));
+    // Yeni flight sheet: ilk cüzdanın coin'iyle başla
+    const startCoin = f?.coin || wallets[0]?.coin || 'ETC';
+    const startAlgo = f?.algo || coinInfo(startCoin)?.[1] || '';
     openDialog({
       title: f ? 'Flight sheet düzenle' : 'Yeni flight sheet',
       wide: true,
       body: html`
         <div class="form-grid">
           <div class="field full"><label>Ad</label><input class="input" name="name" value="${f?.name || ''}" maxlength="60" placeholder="ör. ETC · 2miners · lolMiner" required></div>
-          <div class="field"><label>Coin</label><input class="input" name="coin" list="coin-list" value="${f?.coin || 'ETC'}" maxlength="12" required>
+          <div class="field"><label>Coin</label><input class="input" name="coin" list="coin-list" value="${startCoin}" maxlength="12" required>
             <datalist id="coin-list">${COINS.map(([c]) => html`<option value="${c}">`)}</datalist></div>
-          <div class="field"><label>Algoritma</label><input class="input" name="algo" list="algo-list" value="${f?.algo || 'etchash'}" maxlength="30" required>
+          <div class="field"><label>Algoritma</label><input class="input" name="algo" list="algo-list" value="${startAlgo}" maxlength="30" required>
             <datalist id="algo-list">${COINS.map(([, a]) => html`<option value="${a}">`)}</datalist></div>
           <div class="field full"><label>Cüzdan</label><select name="wallet_id">${wallets.map((w) => html`<option value="${w.id}" ${w.id === f?.wallet_id ? 'selected' : ''}>${w.coin} · ${w.name}</option>`)}</select></div>
           <div class="field full"><label>Havuz adresleri</label>
-            <textarea class="mono" name="pools" spellcheck="false" placeholder="stratum+tcp://etc.2miners.com:1010">${(f?.pools || []).join('\n')}</textarea>
+            <textarea class="mono" name="pools" spellcheck="false" placeholder="${coinInfo(startCoin)?.[2] || 'stratum+tcp://havuz-adresi:port'}">${(f?.pools || (f ? [] : [coinInfo(startCoin)?.[2]].filter(Boolean))).join('\n')}</textarea>
             <span class="hint">Her satıra bir adres. İlki ana havuz, diğerleri yedek.</span></div>
           <div class="field"><label>Worker adı</label><input class="input mono" name="worker_template" value="${f?.worker_template || '%RIG_NAME%'}" maxlength="40">
             <span class="hint">%RIG_NAME% rig adıyla değiştirilir.</span></div>
@@ -125,7 +132,7 @@ export async function flightView(el) {
           <h3 style="margin-bottom:8px">Miner</h3>
           <div data-miners style="display:flex;flex-direction:column;gap:10px">${(f?.miners?.length ? f.miners : [{}]).map((m) => minerRow(versions, m))}</div>
           <button type="button" class="btn sm" style="margin-top:10px" data-row-add>${icon('plus')}İkinci miner ekle</button>
-          <div class="hint" style="margin-top:6px">Karışık rig'de (AMD + NVIDIA) ya ikisini de destekleyen tek miner (lolMiner) ya da kart türüne göre iki miner seçin.</div>
+          <div class="hint" style="margin-top:6px">Karışık rig'de (AMD + NVIDIA) ya ikisini de destekleyen tek miner ya da kart türüne göre iki miner seçin. Seçilen algoritmayı desteklemeyen miner'lar listede pasif görünür.</div>
         </div>`,
       onOpen: (dlg) => {
         const box = dlg.querySelector('[data-miners]');
@@ -133,6 +140,45 @@ export async function flightView(el) {
         dlg.querySelector('[data-row-add]').addEventListener('click', () => { box.insertAdjacentHTML('beforeend', String(minerRow(versions))); sync(); });
         box.addEventListener('click', (e) => { if (e.target.closest('[data-row-del]') && box.children.length > 1) { e.target.closest('[data-miner-row]').remove(); sync(); } });
         sync();
+        // Cüzdan → coin → algoritma → havuz ve miner listesi birbirine bağlı
+        const fm = dlg.querySelector('form') || dlg;
+        const coinEl = fm.querySelector('[name=coin]'), algoEl = fm.querySelector('[name=algo]');
+        const poolsEl = fm.querySelector('[name=pools]'), walletEl = fm.querySelector('[name=wallet_id]');
+        const filterMiners = () => {
+          const algo = algoEl.value.trim().toLowerCase();
+          box.querySelectorAll('select[name=mv]').forEach((sel) => {
+            let firstOk = null;
+            [...sel.options].forEach((o) => {
+              const v = versions.find((x) => String(x.id) === o.value);
+              const ok = !algo || !v.algos.length || v.algos.includes(algo);
+              o.disabled = !ok;
+              o.textContent = o.dataset.label + (ok ? '' : ' — bu algoritmayı desteklemez');
+              if (ok && !firstOk) firstOk = o;
+            });
+            if (sel.selectedOptions[0]?.disabled && firstOk) sel.value = firstOk.value;
+          });
+        };
+        const setCoin = (coin) => {
+          const prev = coinInfo(coinEl.value);
+          const info = coinInfo(coin);
+          coinEl.value = String(coin).toUpperCase();
+          if (!info) return;
+          algoEl.value = info[1];
+          poolsEl.placeholder = info[2] || 'stratum+tcp://havuz-adresi:port';
+          // Havuz boşsa ya da önceki coin'in önerisi duruyorsa yenisiyle değiştir
+          const cur = poolsEl.value.trim();
+          if (!cur || (prev && cur === prev[2])) poolsEl.value = info[2] || '';
+          filterMiners();
+        };
+        walletEl.addEventListener('change', () => {
+          const w = wallets.find((x) => String(x.id) === walletEl.value);
+          if (w) setCoin(w.coin);
+        });
+        coinEl.addEventListener('change', () => setCoin(coinEl.value));
+        algoEl.addEventListener('input', filterMiners);
+        dlg.querySelector('[data-row-add]').addEventListener('click', filterMiners);
+        if (!f && walletEl.value) walletEl.dispatchEvent(new Event('change'));
+        filterMiners();
       },
       onSubmit: async (form) => {
         const d = formData(form);
