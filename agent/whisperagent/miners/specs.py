@@ -304,12 +304,15 @@ class SRBMiner(Spec):
         data = _http_json(self.port, "/")
         algo = (data.get("algorithms") or [{}])[0]
         per_gpu = (algo.get("hashrate") or {}).get("gpu") or {}
+        acc, rej = algo.get("gpu_accepted_shares") or {}, algo.get("gpu_rejected_shares") or {}
         out = {}
         for dev in data.get("gpu_devices", []):
-            bus = _match_bus(dev.get("bus_id"), gpus)
-            h = per_gpu.get(f"gpu{dev.get('device_id')}")
+            # 3.8: kart "device": "gpu0" / "id": 0, adres "topology_id": "01:00.0" (eski sürümler "device_id" ve "bus_id")
+            bus = _match_bus(dev.get("topology_id"), gpus) or _match_bus(dev.get("bus_id"), gpus)
+            key = dev.get("device") or f"gpu{dev.get('id', dev.get('device_id'))}"
+            h = per_gpu.get(key)
             if bus and h is not None:
-                out[bus] = {"hashrate": h, "accepted": None, "rejected": None}  # SRB share'leri sadece toplam verir
+                out[bus] = {"hashrate": h, "accepted": acc.get(key), "rejected": rej.get(key)}
         return out
 
 

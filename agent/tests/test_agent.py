@@ -297,6 +297,16 @@ class NewMinersTest(unittest.TestCase):
                                                "algorithms": [{"hashrate": {"gpu": {"gpu0": 30.5e6, "total": 30.5e6}}}]}})
         self.assertEqual(s["0a:00.0"]["hashrate"], 30.5e6)  # SRB onluk bus 10 = 0x0a
 
+    def test_srbminer_38_device_field(self):
+        """SRBMiner 3.8.0 gerçek çıktısı (3080 rig'i, evrprogpow): "device_id" yok, kart "device"/"id", adres "topology_id"."""
+        s = self.stats_with("srbminer", {"/": {
+            "gpu_devices": [{"id": 0, "topology_id": "03:00.0", "bus_id": 3, "device": "gpu0"},
+                            {"id": 1, "topology_id": "10:00.0", "bus_id": 16, "device": "gpu1"}],
+            "algorithms": [{"name": "evrprogpow", "hashrate": {"gpu": {"gpu0": 47175162.17, "gpu1": 47255846.56, "total": 94431008.73}},
+                            "gpu_accepted_shares": {"gpu0": 12, "gpu1": 15}, "gpu_rejected_shares": {"gpu0": 0, "gpu1": 0}}]}})
+        self.assertEqual(s["03:00.0"], {"hashrate": 47175162.17, "accepted": 12, "rejected": 0})
+        self.assertEqual(s["10:00.0"]["hashrate"], 47255846.56)
+
     def test_rigel_generic(self):
         a = SPECS["rigel"].args(FS, {}, NV)
         self.assertEqual(a[a.index("-w") + 1], "Salon-1")
