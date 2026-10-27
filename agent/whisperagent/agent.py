@@ -6,7 +6,7 @@ import socket
 import subprocess
 import time
 
-from . import VERSION, config, display, oc, updater
+from . import VERSION, config, console, display, oc, updater
 from .tuner import Tuner
 from .api import Api, ApiError
 from .hw import backend
@@ -195,37 +195,87 @@ class Agent:
                 log.error("Miner hazırlanamadı: %s", e)
 
     # ---------- komutlar ----------
+    BASIC_COMMANDS = ("miner_start", "miner_stop", "miner_restart", "apply_oc")
+
+    def exec_basic(self, ctype):
+        """Panelden ve rig'in kendi ekranından (wm / miner komutları) gelen ortak komutlar → (durum, kod, çıktı)."""
+        if ctype == "miner_start":
+            if os.path.exists(STOP_FLAG):
+                os.remove(STOP_FLAG)
+            if not self.miners and self.cfg and self.cfg.get("flight_sheet"):
+                self.build_miners()
+            if self.start_miners():
+                return "done", 0, "Miner başlatıldı"
+            return "failed", 1, self.error or "Flight sheet atanmamış ya da uygun kart yok"
+        if ctype == "miner_stop":
+            os.makedirs(config.STATE_DIR, exist_ok=True)
+            open(STOP_FLAG, "w").close()
+            for _s, proc, _g in self.miners:
+                proc.stop()
+            if self.fake:
+                self.hw.mining.clear()
+            self.miner_state = "stopped"
+            return "done", 0, "Miner durduruldu"
+        if ctype == "miner_restart":
+            if os.path.exists(STOP_FLAG):
+                os.remove(STOP_FLAG)
+            self.fs_signature = None
+            self.apply_config()
+            return "done", 0, "Miner yeniden başlatıldı" if self.miners else (self.error or "Çalıştırılacak miner yok")
+        if ctype == "apply_oc":
+            return "done", 0, "; ".join(self.apply_oc()) or "OC listesi boş"
+        return "failed", 1, f"Bilinmeyen komut: {ctype}"
+
+    def reboot_now(self):
+        self.stop_miners()
+        self.miner_state = "stopped"
+        self.fs_signature = None  # yeniden başlatma olmazsa sonraki turda miner'lar tekrar kurulsun
+        if self.fake:
+            log.info("(simülasyon) yeniden başlatma atlandı")
+        else:
+            subprocess.run(["systemctl", "reboot"], check=False)
+
+    def local_commands(self):
+        """Rig'in kendi ekranında yazılan komutlar (wm, miner, sreboot) RUN_DIR/cmd üzerinden gelir."""
+        d = os.path.join(config.RUN_DIR, "cmd")
+        try:
+            names = sorted(n for n in os.listdir(d) if n.endswith(".json"))
+        except OSError:
+            return
+        for name in names:
+            path = os.path.join(d, name)
+            try:
+                with open(path, encoding="utf-8") as f:
+                    ctype = json.load(f).get("type")
+                os.remove(path)
+            except (OSError, ValueError):
+                continue
+            log.info("Yerel komut: %s", ctype)
+            try:
+                if ctype == "reboot":
+                    res = ("done", 0, "Yeniden başlatılıyor")
+                elif ctype == "update":
+                    self.next_update_check = 0
+                    res = ("done", 0, "Güncelleme kontrolü birkaç saniye içinde yapılacak")
+                else:
+                    res = self.exec_basic(ctype)
+            except Exception as e:  # komut hatası agent'ı düşürmesin
+                res = ("failed", 1, f"Hata: {e}")
+            try:
+                with open(path[:-5] + ".out", "w", encoding="utf-8") as f:
+                    json.dump({"status": res[0], "output": res[2]}, f, ensure_ascii=False)
+            except OSError:
+                pass
+            if ctype == "reboot":
+                self.reboot_now()
+
     def run_commands(self):
         for c in self.api.commands():
             ctype, status, code, out = c["type"], "done", 0, ""
             log.info("Komut: %s", ctype)
             try:
-                if ctype == "miner_start":
-                    if os.path.exists(STOP_FLAG):
-                        os.remove(STOP_FLAG)
-                    if not self.miners and self.cfg and self.cfg.get("flight_sheet"):
-                        self.build_miners()
-                    if self.start_miners():
-                        out = "Miner başlatıldı"
-                    else:
-                        status, code, out = "failed", 1, self.error or "Flight sheet atanmamış ya da uygun kart yok"
-                elif ctype == "miner_stop":
-                    os.makedirs(config.STATE_DIR, exist_ok=True)
-                    open(STOP_FLAG, "w").close()
-                    for _s, proc, _g in self.miners:
-                        proc.stop()
-                    if self.fake:
-                        self.hw.mining.clear()
-                    self.miner_state = "stopped"
-                    out = "Miner durduruldu"
-                elif ctype == "miner_restart":
-                    if os.path.exists(STOP_FLAG):
-                        os.remove(STOP_FLAG)
-                    self.fs_signature = None
-                    self.apply_config()
-                    out = "Miner yeniden başlatıldı" if self.miners else (self.error or "Çalıştırılacak miner yok")
-                elif ctype == "apply_oc":
-                    out = "; ".join(self.apply_oc()) or "OC listesi boş"
+                if ctype in self.BASIC_COMMANDS:
+                    status, code, out = self.exec_basic(ctype)
                 elif ctype == "oc_tune":
                     if self.tuner and not self.tuner.finished:
                         status, code, out = "failed", 1, "Zaten bir otomatik OC çalışıyor"
@@ -249,13 +299,7 @@ class Agent:
                         out = "Çalışan otomatik OC yok"
                 elif ctype == "reboot":
                     self.api.command_result(c["id"], "done", 0, "Yeniden başlatılıyor")
-                    self.stop_miners()
-                    self.miner_state = "stopped"
-                    self.fs_signature = None  # yeniden başlatma olmazsa sonraki turda miner'lar tekrar kurulsun
-                    if self.fake:
-                        log.info("(simülasyon) yeniden başlatma atlandı")
-                    else:
-                        subprocess.run(["systemctl", "reboot"], check=False)
+                    self.reboot_now()
                     continue
                 else:
                     status, code, out = "failed", 1, f"Bilinmeyen komut: {ctype}"
@@ -365,20 +409,37 @@ class Agent:
             self.next_update_check = time.monotonic() + 6 * 3600
             self.check_update()
 
-        self.view["miner"] = {"running": "çalışıyor", "starting": "başlıyor", "downloading": "indiriliyor",
-                              "stopped": "durduruldu", "error": "hata"}.get(self.miner_state, self.miner_state)
-        self.view["error"] = self.error
-        display.show(self.view)
-
+        self.refresh_screen()
         self.wait_poll()
 
     def wait_poll(self):
         """Bekleme sırasında miner'ları izle. Monotonik saat: açılışta saat internetten düzeltilince
         (BIOS saati yerel saatteyse 3 saat geri atlar) bekleme uzamaz."""
         until = time.monotonic() + self.poll
+        next_screen = time.monotonic() + 3
         while time.monotonic() < until:
             self.watchdog()
+            self.local_commands()
+            if time.monotonic() >= next_screen:
+                next_screen = time.monotonic() + 3
+                self.refresh_screen()
             time.sleep(1)
+
+    def refresh_screen(self):
+        """Monitördeki canlı ekran (HiveOS gibi): kart kart hashrate, sıcaklık, share; her 3 sn'de bir."""
+        try:
+            self.collect()
+        except Exception as e:  # sensör okunamadı: ekran eski veriyle kalsın
+            log.debug("Ekran verisi okunamadı: %s", e)
+        fs = (self.cfg or {}).get("flight_sheet") or {}
+        self.view["flight"] = {"coin": fs.get("coin"), "algo": fs.get("algo"), "pool": (fs.get("pools") or [None])[0],
+                               "miners": [s.name for s, _p, _g in self.miners]}
+        self.view["uptime"] = min((p.uptime() for _s, p, _g in self.miners), default=0)
+        self.view["miner"] = {"running": "çalışıyor", "starting": "başlıyor", "downloading": "indiriliyor",
+                              "stopped": "durduruldu", "error": "hata"}.get(self.miner_state, self.miner_state)
+        self.view["error"] = self.error
+        self.view["tune"] = self.tuner.status() if self.tuner else None
+        display.show(self.view)
 
     def check_update(self):
         if self.fake or os.environ.get("WM_NO_UPDATE") == "1":
@@ -424,6 +485,8 @@ class Agent:
         self.view["server"] = self.server
 
     def run(self):
+        if not self.fake:
+            console.provision()  # wm / miner / sreboot komutları ve tty2 konsolu (eski imajlara da gelsin)
         self.wait_conf_partition()
         backoff = 5
         while True:

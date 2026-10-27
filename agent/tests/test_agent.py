@@ -1,3 +1,4 @@
+import time
 """Birim testleri: python -m unittest discover -s tests (agent klasöründen)."""
 import os
 import sys
@@ -111,10 +112,50 @@ class ClockJumpTest(unittest.TestCase):
         fake = mock.Mock(time=lambda: clock["wall"], monotonic=lambda: clock["mono"], sleep=sleep)
         a = object.__new__(agent_mod.Agent)
         a.poll = 10
-        a.watchdog = lambda: None
+        a.watchdog = a.local_commands = a.refresh_screen = lambda: None
         with mock.patch.object(agent_mod, "time", fake):
             a.wait_poll()
         self.assertEqual(clock["sleeps"], 10)
+
+
+class ConsoleTest(unittest.TestCase):
+    """Rig başındaki canlı ekran ve wm / miner komutları."""
+
+    def test_render_live_screen(self):
+        from whisperagent import display
+        st = {"rig_name": "Dükkan", "connection": "bağlı", "miner": "çalışıyor", "uptime": 3725,
+              "flight": {"coin": "RVN", "algo": "kawpow", "pool": "stratum+tcp://rvn.2miners.com:6060", "miners": ["BzMiner"]},
+              "gpus": [{"index": 0, "model": "NVIDIA GeForce RTX 3080", "hashrate": 40.25e6, "temp": 62, "fan": 70,
+                        "power": 285, "accepted": 33, "rejected": 1}]}
+        text = display.render(st)
+        self.assertIn("40.25 MH/s", text)
+        self.assertIn("33 kabul", text)
+        self.assertIn("1 sa 2 dk", text)
+        self.assertNotIn("", text)               # status.txt düz yazı
+        self.assertIn("[32m", display.render(st, color=True))
+
+    def test_cli_command_reaches_agent(self):
+        import tempfile, threading
+        from unittest import mock
+        from whisperagent import agent as agent_mod, cli, config as cfg
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(cfg, "RUN_DIR", d),                 mock.patch.object(cli, "CMD_DIR", os.path.join(d, "cmd")):
+            a = object.__new__(agent_mod.Agent)
+            a.exec_basic = lambda t: ("done", 0, f"{t} tamam")
+            stop = threading.Event()
+
+            def loop():
+                while not stop.is_set():
+                    a.local_commands()
+                    time.sleep(0.05)
+            th = threading.Thread(target=loop, daemon=True)
+            th.start()
+            try:
+                with mock.patch("sys.stdout"):
+                    self.assertEqual(cli.main(["miner", "restart"]), 0)
+            finally:
+                stop.set()
+                th.join()
+            self.assertEqual(os.listdir(os.path.join(d, "cmd")), [])   # komut ve sonuç dosyası temizlendi
 
 if __name__ == "__main__":
     unittest.main()
