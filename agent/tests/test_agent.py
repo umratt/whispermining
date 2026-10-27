@@ -188,6 +188,17 @@ class RemoteConsoleTest(unittest.TestCase):
         self.assertEqual(run.call_args[0][0], ["lspci"])
         self.assertEqual((st, out), ("done", "01:00.0 VGA compatible controller: NVIDIA"))
 
+    def test_slot_report(self):
+        from unittest import mock
+        a = self.agent()
+        dmi = ("Handle 0x0009, DMI type 9, 17 bytes\nSystem Slot Information\n\tDesignation: PCIE3\n\tType: x1 PCI Express\n"
+               "\tCurrent Usage: In Use\n\tBus Address: 0000:08:00.0\n")
+        with mock.patch("whisperagent.agent.run", side_effect=lambda cmd, timeout: (0, dmi) if cmd[0] == "dmidecode" else (0, "-[0000:00]-+-1c.0-[08]--00.0")):
+            st, _code, out = a.console_exec("yuva")
+        self.assertEqual(st, "done")
+        self.assertIn("PCIE3: 0000:08:00.0 (In Use, x1 PCI Express)", out)
+        self.assertIn("1c.0-[08]", out)
+
 
 class PearlTest(unittest.TestCase):
     """Pearl (pearlhash) sadece tensor çekirdekli kartlarda: karışık rig'de P106 / RX 580 miner'a verilmez."""

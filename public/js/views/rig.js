@@ -515,7 +515,7 @@ export async function rigView(el, [rigId]) {
           term.scrollTop = term.scrollHeight;
         };
         const HELP = ['miner start · miner stop · miner restart · miner log · miner api (miner\'ın ham verisi)', 'oc (OC değerlerini tekrar uygula) · sreboot (rig\'i yeniden başlat)',
-          'nvidia-smi · clinfo (AMD OpenCL) · lspci (kartlar) · dmesg (sistem hataları)',
+          'nvidia-smi · clinfo (AMD OpenCL) · lspci (kartlar) · yuva (kartın takılı olduğu yuva) · dmesg (sistem hataları)',
           'uptime · free · df · ip · ping · log (agent kaydı) · bilgi · guncelle'].join('\n');
         let busy = false;
         const run = async (line) => {

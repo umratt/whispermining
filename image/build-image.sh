@@ -87,7 +87,7 @@ log "Çekirdek, önyükleyici ve araçlar"
 in_chroot apt-get update -qq
 quiet in_chroot apt-get install -y -qq --no-install-recommends \
   linux-generic grub-pc-bin grub-efi-amd64-bin grub2-common initramfs-tools \
-  python3 pciutils curl ca-certificates cloud-guest-utils fdisk gdisk dosfstools e2fsprogs \
+  python3 pciutils dmidecode curl ca-certificates cloud-guest-utils fdisk gdisk dosfstools e2fsprogs \
   netplan.io iproute2 iputils-ping openssh-server sudo kbd console-setup locales tzdata less nano
 
 log "NVIDIA $NVIDIA_BRANCH sürücüsü (Ubuntu'nun hazır derlenmiş modülleriyle; DKMS yok)"

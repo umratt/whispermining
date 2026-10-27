@@ -36,6 +36,37 @@ def algo_supported(algo, gpu):
     return check(gpu) if check else True
 
 
+SLOT_USAGE = {3: "Available", 4: "In Use"}
+
+
+def smbios_slots(path="/sys/firmware/dmi/tables/DMI"):
+    """SMBIOS tablosundaki yuva kayıtları (tip 9): "ad: adres (durum)" satırları."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError:
+        return []
+    rows, i = [], 0
+    while i + 4 <= len(data):
+        typ, ln = data[i], data[i + 1]
+        if ln < 4:
+            break
+        end = data.find(b"\0\0", i + ln)
+        if end < 0:
+            break
+        strings = data[i + ln:end].split(b"\0")
+        if typ == 9 and ln >= 17:
+            idx = data[i + 4]
+            name = strings[idx - 1].decode("ascii", "replace") if 0 < idx <= len(strings) else "?"
+            seg, bus, devfn = int.from_bytes(data[i + 13:i + 15], "little"), data[i + 15], data[i + 16]
+            addr = f"{seg:04x}:{bus:02x}:{devfn >> 3:02x}.{devfn & 7}" if bus != 0xff else "?"
+            rows.append(f"{name}: {addr} ({SLOT_USAGE.get(data[i + 7], 'Unknown')})")
+        if typ == 127:
+            break
+        i = end + 2
+    return rows
+
+
 def tail_lines(path, n):
     """Dosyanın son n satırı, renk kodları temizlenmiş (panelde düz yazı gösterilir)."""
     try:
@@ -123,7 +154,7 @@ class Agent:
 
     def rescan(self, force=False):
         gpus = self.hw.scan()
-        changed = [g["bus_id"] + g["model"] for g in gpus] != [g["bus_id"] + g["model"] for g in self.gpus]
+        changed = [g["bus_id"] + g["model"] for g in gpus] != [g["bus_id"] + g["model"] for g in getattr(self, "gpus", [])]
         self.gpus = gpus
         self.last_hw_scan = time.monotonic()
         problem = getattr(self.hw, "problem", None)
@@ -325,6 +356,8 @@ class Agent:
         if cmd == "guncelle":
             self.next_update_check = 0
             return "done", 0, "Güncelleme kontrolü birkaç saniye içinde yapılacak"
+        if cmd == "yuva":
+            return "done", 0, self.slot_report()[-11000:]
         argv = self.DIAG.get(cmd)
         if not argv:
             return "failed", 1, f"Bilinmeyen komut: {cmd}"
@@ -341,6 +374,40 @@ class Agent:
             gpu = [l for l in lines if re.search(r"NVRM|nvidia|amdgpu|BAR \d|no space for|can't claim", l, re.I)]
             out = "\n".join(gpu[-40:] + ["── son satırlar ──"] + lines[-20:]) if gpu else "\n".join(lines[-40:])
         return ("done" if code == 0 else "failed"), code, out[-11000:] or "(çıktı yok)"
+
+    def slot_report(self):
+        """Kartın takılı olduğu fiziksel yuva: anakartın yuva tablosu (SMBIOS), ACPI yuvaları ve PCI ağacı."""
+        parts = []
+        code, out = run(["dmidecode", "-t", "slot"], timeout=20)
+        slots, cur = [], {}
+        for line in out.splitlines() if code == 0 else []:
+            line = line.strip()
+            if line.startswith("Handle"):
+                cur = {}
+                slots.append(cur)
+            elif ":" in line:
+                k, v = line.split(":", 1)
+                cur[k.strip()] = v.strip()
+        rows = [f"{s.get('Designation', '?')}: {s.get('Bus Address', '?')} ({s.get('Current Usage', '?')}, {s.get('Type', '?')})"
+                for s in slots if "Designation" in s]
+        if code == 127:  # dmidecode kurulu değilse tablo çekirdekten okunur
+            rows, code = smbios_slots(), 0
+        parts.append("── anakart yuva tablosu (dmidecode) ──\n" + ("\n".join(rows) or
+                     ("dmidecode bu sistemde yok" if code == 127 else "anakart yuva bilgisi vermiyor")))
+        acpi = []
+        base = "/sys/bus/pci/slots"
+        for name in sorted(os.listdir(base)) if os.path.isdir(base) else []:
+            try:
+                with open(os.path.join(base, name, "address")) as f:
+                    acpi.append(f"yuva {name}: {f.read().strip()}")
+            except OSError:
+                pass
+        parts.append("── ACPI yuvaları ──\n" + ("\n".join(acpi) or "yok"))
+        code, out = run(["lspci", "-tv"], timeout=20)
+        parts.append("── PCI ağacı ──\n" + (out.strip() if code == 0 else "okunamadı"))
+        cards = [f"{g.get('bus_id')}: {g.get('model')}" for g in getattr(self, "gpus", [])]
+        parts.append("── kartlar ──\n" + ("\n".join(cards) or "yok"))
+        return "\n".join(parts)
 
     def reboot_now(self):
         self.stop_miners()

@@ -15,7 +15,7 @@ const str = (v, max = 200) => (v === undefined || v === null ? null : String(v).
 const COMMAND_TYPES = new Set(['miner_start', 'miner_stop', 'miner_restart', 'reboot', 'apply_oc', 'oc_tune', 'oc_tune_cancel', 'console']);
 // Panelden rig'e yazılabilen komutlar (rig ekranı). Serbest kabuk komutu yok: agent sadece bu listeyi tanır.
 const CONSOLE_COMMANDS = ['miner start', 'miner stop', 'miner restart', 'miner log', 'miner api', 'oc', 'sreboot', 'nvidia-smi', 'clinfo',
-  'uptime', 'df', 'free', 'ip', 'ping', 'lspci', 'dmesg', 'log', 'bilgi', 'guncelle'];
+  'uptime', 'df', 'free', 'ip', 'ping', 'lspci', 'dmesg', 'yuva', 'log', 'bilgi', 'guncelle'];
 // Otomatik OC uzun sürer: rig'e gönderildikten sonra bu kadar süre sonuç beklenir
 const LONG_COMMANDS = { oc_tune: 4 * 3600 };
 const SCREEN_POLL_SEC = 3; // panelde ekran izlenirken agent'ın bağlanma aralığı
