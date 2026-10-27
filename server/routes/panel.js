@@ -8,6 +8,7 @@ const rigsSvc = require('../services/rigs');
 const vault = require('../services/confvault');
 const telegram = require('../services/telegram');
 const profit = require('../services/profit');
+const autoswitch = require('../services/autoswitch');
 const { COMMAND_TYPES, CONSOLE_COMMANDS } = require('./agent');
 
 const router = express.Router();
@@ -176,11 +177,60 @@ router.get('/profit', async (req, res) => {
   const models = all(`SELECT g.model, COUNT(*) AS count FROM gpus g JOIN rigs r ON r.id = g.rig_id
                       WHERE r.owner_id = ? AND g.present = 1 GROUP BY g.model ORDER BY count DESC`, req.user.id);
   try {
-    res.json(await profit.ranking(models));
+    const u = get('SELECT power_price FROM users WHERE id = ?', req.user.id);
+    res.json({ ...(await profit.ranking(models)), power_price: u.power_price });
   } catch (err) {
     console.error('[profit]', err.message);
     bad(res, 'Kazanç verisi şu an alınamadı (WhatToMine ya da kur servisine ulaşılamadı). Birkaç dakika sonra tekrar deneyin.', 502);
   }
+});
+
+// WhatToMine hesaplayıcısı gibi: ?c=3080:1,10606:12 → seçilen kart setinin toplamıyla tüm coin'ler
+router.get('/profit/calc', async (req, res) => {
+  const selection = String(req.query.c || '').split(',').slice(0, 40).map((p) => {
+    const [key, n] = p.split(':');
+    return { key: String(key || '').slice(0, 12), count: Math.max(0, Math.min(500, Math.round(Number(n) || 0))) };
+  }).filter((s) => s.key);
+  try {
+    res.json(await profit.calc(selection));
+  } catch (err) {
+    console.error('[profit]', err.message);
+    bad(res, 'Kazanç verisi şu an alınamadı (WhatToMine ya da kur servisine ulaşılamadı). Birkaç dakika sonra tekrar deneyin.', 502);
+  }
+});
+
+// Elektrik fiyatı (₺/kWh): kazanç sayfası ve otomatik coin değiştirme bunu kullanır
+router.put('/me/power-price', (req, res) => {
+  const v = Number(req.body.value);
+  if (!(v >= 0 && v <= 100)) return bad(res, 'Elektrik fiyatı 0–100 ₺/kWh arası olmalı.');
+  run('UPDATE users SET power_price = ? WHERE id = ?', Math.round(v * 100) / 100, req.user.id);
+  res.json({ ok: true });
+});
+
+// ---- Otomatik coin değiştirme: tüm rig'ler, toplam kazancı en yüksek tek coin ----
+const autoSwitchView = (r) => ({
+  enabled: r.state.enabled, decision: r.decision, last_check: r.state.last_check || null, last_switch_at: r.state.last_switch_at || null,
+  log: r.state.log || [], candidates: r.candidates, current_fs_id: r.current_fs_id, best_fs_id: r.best?.fs_id || null,
+  created: r.created, usd_try: r.usd_try, power_price: r.power_price, rig_count: r.rig_count,
+  min_gain: autoswitch.MIN_GAIN, min_hold_h: autoswitch.MIN_HOLD_SEC / 3600,
+});
+router.get('/auto-switch', async (req, res) => {
+  try {
+    const s = autoswitch.state(req.user.id);
+    const ev = await autoswitch.evaluate(req.user.id);
+    res.json(autoSwitchView({ ...ev, state: s, decision: s.last_decision || null }));
+  } catch (err) { bad(res, `Kazanç verisi alınamadı: ${err.message}`, 502); }
+});
+router.put('/auto-switch', async (req, res) => {
+  const on = !!req.body.enabled;
+  run('UPDATE users SET auto_switch = ? WHERE id = ?', on ? 1 : 0, req.user.id);
+  try {
+    // Açılınca hemen bakılır (6 saat beklenmez); kapatınca rig'ler oldukları coin'de kalır
+    res.json(autoSwitchView(await autoswitch.check(req.user.id, { force: on })));
+  } catch (err) { bad(res, `Kazanç verisi alınamadı: ${err.message}`, 502); }
+});
+router.post('/auto-switch/check', async (req, res) => {
+  try { res.json(autoSwitchView(await autoswitch.check(req.user.id, { force: !!req.body.force }))); } catch (err) { bad(res, err.message, 502); }
 });
 
 // ---- Rig ekranını izleme ----

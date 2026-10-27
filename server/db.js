@@ -279,6 +279,12 @@ const MIGRATIONS = [
   ALTER TABLE rigs ADD COLUMN screen_at INTEGER;
   ALTER TABLE rigs ADD COLUMN screen_watch_until INTEGER;
   `,
+  // v11: kazanca göre otomatik coin değiştirme (tüm rig'ler tek coin) ve elektrik fiyatı
+  `
+  ALTER TABLE users ADD COLUMN power_price REAL NOT NULL DEFAULT 3;
+  ALTER TABLE users ADD COLUMN auto_switch INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE users ADD COLUMN auto_switch_state TEXT;
+  `,
 ];
 
 function migrate() {

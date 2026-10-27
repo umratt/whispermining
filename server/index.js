@@ -68,6 +68,7 @@ every(60, stats.rollup);
 every(30, alerts.runChecks);
 every(3600, stats.purge);
 setTimeout(() => { stats.rollup(); stats.purge(); }, 5000);
+require('./services/autoswitch').start(); // kazanca göre otomatik coin değiştirme (açık olan hesaplar için)
 
 // "localhost": hem IPv4 hem IPv6 geri döngü adresini dinle (dışarıya açılmaz)
 const hosts = config.host === 'localhost' ? ['127.0.0.1', '::1'] : [config.host];

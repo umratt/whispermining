@@ -68,8 +68,10 @@ async function load() {
     .filter(([name, c]) => !name.startsWith('Nicehash') && !c.lagging)
     .map(([name, c]) => ({
       name, tag: c.tag, algo: c.algorithm, key: ALGO_KEY[c.algorithm] || null, our_algo: OUR_ALGO[c.algorithm] || null,
-      btc_default: Number(c.btc_revenue), coins_default: Number(c.estimated_rewards), btc_rate: Number(c.exchange_rate),
-      market_cap: c.market_cap, updated: c.timestamp,
+      btc_default: Number(c.btc_revenue), btc_default24: Number(c.btc_revenue24), coins_default: Number(c.estimated_rewards),
+      btc_rate: Number(c.exchange_rate), btc_rate24: Number(c.exchange_rate24), volume_btc: Number(c.exchange_rate_vol) || 0,
+      block_time: Number(c.block_time), block_reward: Number(c.block_reward), difficulty: Number(c.difficulty),
+      nethash: Number(c.nethash), market_cap: c.market_cap, updated: c.timestamp,
     }));
   cache = { at: Date.now(), list, factors, defaults, btc_usd: px.BTCUSDT, usd_try: px.USDTTRY };
   return cache;
@@ -108,4 +110,47 @@ async function ranking(models) {
   return { updated_at: Math.floor(d.at / 1000), btc_usd: d.btc_usd, usd_try: d.usd_try, stale: d.stale || null, cards };
 }
 
-module.exports = { ranking, cardKey };
+// WhatToMine kart anahtarı → okunur ad (kart seçicide)
+const LABELS = {
+  46: 'RTX 4060', '46Ti': 'RTX 4060 Ti', 47: 'RTX 4070', '47s': 'RTX 4070 Super', '47Ti': 'RTX 4070 Ti', '47Tis': 'RTX 4070 Ti Super',
+  4080: 'RTX 4080', '48s': 'RTX 4080 Super', 4090: 'RTX 4090', 56: 'RTX 5060', '56Ti': 'RTX 5060 Ti', 57: 'RTX 5070', '57Ti': 'RTX 5070 Ti',
+  58: 'RTX 5080', 59: 'RTX 5090', 3060: 'RTX 3060', '3060Ti': 'RTX 3060 Ti', 3070: 'RTX 3070', '37Ti': 'RTX 3070 Ti', 3080: 'RTX 3080',
+  '38Ti': 'RTX 3080 Ti', 3090: 'RTX 3090', '39Ti': 'RTX 3090 Ti', 2060: 'RTX 2060', 2070: 'RTX 2070', 2080: 'RTX 2080', '2080Ti': 'RTX 2080 Ti',
+  1660: 'GTX 1660', '1660Ti': 'GTX 1660 Ti', '166s': 'GTX 1660 Super', 1070: 'GTX 1070', '1070Ti': 'GTX 1070 Ti', 1080: 'GTX 1080',
+  '1080Ti': 'GTX 1080 Ti', '1050Ti': 'GTX 1050 Ti', 10606: 'GTX 1060 6GB / P106-100',
+  470: 'RX 470', 480: 'RX 480', 570: 'RX 570', 580: 'RX 580', 380: 'R9 380', fury: 'R9 Fury', vega56: 'Vega 56', vega64: 'Vega 64',
+  vii: 'Radeon VII', 5600: 'RX 5600', '5600xt': 'RX 5600 XT', '55xt8': 'RX 5500 XT 8GB', 5700: 'RX 5700', '5700xt': 'RX 5700 XT',
+  66: 'RX 6600', '66xt': 'RX 6600 XT', '67xt': 'RX 6700 XT', 68: 'RX 6800', '68xt': 'RX 6800 XT', '69xt': 'RX 6900 XT',
+  '78xt': 'RX 7800 XT', '79xt': 'RX 7900 XT', '79xtx': 'RX 7900 XTX', a2: 'Arc A380', a4: 'Arc A580', a45: 'Arc A750', a5: 'Arc A770',
+};
+const cardLabel = (key) => LABELS[key] || String(key);
+
+// Hashrate birimleri (WhatToMine'ın kullandığı): emin olunanlar
+const UNITS = { kpw: 'MH/s', e4g: 'MH/s', eth: 'MH/s', evr: 'MH/s', ppw: 'MH/s', fpw: 'MH/s', al: 'MH/s', mp: 'MH/s', nx: 'MH/s',
+  fh: 'MH/s', zh: 'Sol/s', eqb: 'Sol/s', cr29: 'G/s', ct32: 'G/s', cc: 'G/s', cng: 'H/s', vh: 'MH/s', krh: 'MH/s', abl: 'MH/s' };
+
+// WhatToMine hesaplayıcısı gibi: seçilen kart seti (anahtar + adet) için tüm coin'ler, kart setinin toplamı
+async function calc(selection) {
+  const d = await data();
+  const sel = selection.filter((s) => d.factors[s.key] && s.count > 0);
+  const rows = [];
+  for (const c of d.list) {
+    if (!c.key || !d.defaults[c.key] || !c.btc_default) continue;
+    let hr = 0; let power = 0;
+    for (const s of sel) {
+      const f = d.factors[s.key];
+      if (f[`${c.key}_hr`]) { hr += f[`${c.key}_hr`] * s.count; power += (f[`${c.key}_p`] || 0) * s.count; }
+    }
+    if (!hr) continue;
+    const ratio = hr / d.defaults[c.key];
+    rows.push({ name: c.name, tag: c.tag, algo: c.algo, our_algo: c.our_algo, hashrate: hr, unit: UNITS[c.key] || '', power,
+      coins: c.coins_default * ratio, usd: c.btc_default * ratio * d.btc_usd, usd24: (c.btc_default24 || c.btc_default) * ratio * d.btc_usd,
+      price_usd: c.btc_rate * d.btc_usd, price_change: c.btc_rate24 ? c.btc_rate / c.btc_rate24 - 1 : null,
+      volume_usd: c.volume_btc * d.btc_usd, market_cap: c.market_cap, block_time: c.block_time, block_reward: c.block_reward,
+      difficulty: c.difficulty, nethash: c.nethash });
+  }
+  return { updated_at: Math.floor(d.at / 1000), btc_usd: d.btc_usd, usd_try: d.usd_try, stale: d.stale || null, rows,
+    gpus: Object.keys(d.factors).map((key) => ({ key, label: cardLabel(key) })).sort((a, b) => a.label.localeCompare(b.label, 'tr')) };
+}
+
+module.exports = { ranking, calc, cardKey, cardLabel };
