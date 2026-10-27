@@ -285,6 +285,10 @@ const MIGRATIONS = [
   ALTER TABLE users ADD COLUMN auto_switch INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE users ADD COLUMN auto_switch_state TEXT;
   `,
+  // v12: kartın takılı olduğu anakart yuvası (agent SMBIOS tablosundan bulursa)
+  `
+  ALTER TABLE gpus ADD COLUMN slot TEXT;
+  `,
 ];
 
 function migrate() {

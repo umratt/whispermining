@@ -1,11 +1,11 @@
 """Kart tarama ve sensör okuma. Her arka uç aynı biçimde liste döndürür.
 
-scan()  → [{index, bus_id, vendor, model, vram_mb, driver, vbios, uuid}]
+scan()  → [{index, bus_id, vendor, model, vram_mb, driver, vbios, uuid, slot}]
 sensors() → {bus_id: {temp, mem_temp, fan, power, core_clk, mem_clk}}
 """
 import os
 
-from . import amd, nvidia
+from . import amd, nvidia, slots
 
 
 def backend():
@@ -20,8 +20,13 @@ class RealHardware:
     def scan(self):
         gpus = nvidia.scan() + amd.scan()
         gpus.sort(key=lambda g: g["bus_id"])
+        try:
+            slot = slots.names([g["bus_id"] for g in gpus])
+        except Exception:  # yuva tablosu okunamasa da kartlar bildirilsin
+            slot = {}
         for i, g in enumerate(gpus):
             g["index"] = i  # panel sırası: PCI adresine göre
+            g["slot"] = slot.get(g["bus_id"])  # anakarttaki yuva adı (ör. J6B1), bilinmiyorsa None
         return gpus
 
     def problem(self, gpus):

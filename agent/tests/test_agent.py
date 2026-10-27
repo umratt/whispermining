@@ -191,13 +191,38 @@ class RemoteConsoleTest(unittest.TestCase):
     def test_slot_report(self):
         from unittest import mock
         a = self.agent()
-        dmi = ("Handle 0x0009, DMI type 9, 17 bytes\nSystem Slot Information\n\tDesignation: PCIE3\n\tType: x1 PCI Express\n"
-               "\tCurrent Usage: In Use\n\tBus Address: 0000:08:00.0\n")
-        with mock.patch("whisperagent.agent.run", side_effect=lambda cmd, timeout: (0, dmi) if cmd[0] == "dmidecode" else (0, "-[0000:00]-+-1c.0-[08]--00.0")):
+        a.gpus = [{"bus_id": "05:00.0", "model": "NVIDIA P106-100", "slot": "J6B1"}]
+        with mock.patch("whisperagent.hw.slots.smbios", return_value=[("J6B1", "0000:00:1c.3", "In Use")]),              mock.patch("whisperagent.agent.run", return_value=(0, "-[0000:00]-+-1c.3-[05]--00.0")):
             st, _code, out = a.console_exec("yuva")
         self.assertEqual(st, "done")
-        self.assertIn("PCIE3: 0000:08:00.0 (In Use, x1 PCI Express)", out)
-        self.assertIn("1c.0-[08]", out)
+        self.assertIn("J6B1: 0000:00:1c.3 (In Use)", out)
+        self.assertIn("1c.3-[05]", out)
+        self.assertIn("05:00.0: NVIDIA P106-100 · yuva J6B1", out)
+
+
+def smbios_slot(name, bus, devfn):
+    """SMBIOS tip 9 kaydı (17 bayt + ad)."""
+    return bytes([9, 17, 0, 0, 1, 0xa5, 0x0d, 4, 3, 1, 0, 0x0c, 0, 0, 0, bus, devfn]) + name.encode() + b"\0\0"
+
+
+class SlotTest(unittest.TestCase):
+    """Kart, kendisi ya da üstündeki köprü yuva tablosunda geçiyorsa yuva adıyla eşlenir (köy orta anakartı)."""
+
+    def test_names_via_bridge(self):
+        import tempfile
+        from unittest import mock
+        from whisperagent.hw import slots
+        dmi = smbios_slot("J6B2", 0, 0x08) + smbios_slot("J6B1", 0, 0xe3) + smbios_slot("BOS", 0xff, 0xff) + bytes([127, 4, 0, 0, 0, 0])
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            f.write(dmi)
+        self.assertEqual(slots.smbios(f.name), [("J6B2", "0000:00:01.0", "In Use"), ("J6B1", "0000:00:1c.3", "In Use"),
+                                                ("BOS", None, "In Use")])
+        bridges = {"01:00.0": ["0000:01:00.0", "0000:00:01.0"], "05:00.0": ["0000:05:00.0", "0000:00:1c.3"],
+                   "02:00.0": ["0000:02:00.0", "0000:00:1c.0"]}
+        with mock.patch.object(slots, "chain", side_effect=lambda bus, _base: bridges[bus]):
+            got = slots.names(["01:00.0", "02:00.0", "05:00.0"], dmi=f.name, acpi_base="/yok")
+        os.unlink(f.name)
+        self.assertEqual(got, {"01:00.0": "J6B2", "05:00.0": "J6B1"})
 
 
 class PearlTest(unittest.TestCase):

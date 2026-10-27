@@ -11,7 +11,7 @@ import time
 from . import VERSION, config, console, display, oc, updater
 from .tuner import Tuner
 from .api import Api, ApiError
-from .hw import backend
+from .hw import backend, slots
 from .miners import SPECS, MinerError, MinerProcess, download_miner
 from .util import log, run
 
@@ -34,37 +34,6 @@ ALGO_NAMES = {"pearl": "Pearl (RTX 20 ve üstü NVIDIA ya da RX 6600–6950 gere
 def algo_supported(algo, gpu):
     check = ALGO_CARDS.get(algo)
     return check(gpu) if check else True
-
-
-SLOT_USAGE = {3: "Available", 4: "In Use"}
-
-
-def smbios_slots(path="/sys/firmware/dmi/tables/DMI"):
-    """SMBIOS tablosundaki yuva kayıtları (tip 9): "ad: adres (durum)" satırları."""
-    try:
-        with open(path, "rb") as f:
-            data = f.read()
-    except OSError:
-        return []
-    rows, i = [], 0
-    while i + 4 <= len(data):
-        typ, ln = data[i], data[i + 1]
-        if ln < 4:
-            break
-        end = data.find(b"\0\0", i + ln)
-        if end < 0:
-            break
-        strings = data[i + ln:end].split(b"\0")
-        if typ == 9 and ln >= 17:
-            idx = data[i + 4]
-            name = strings[idx - 1].decode("ascii", "replace") if 0 < idx <= len(strings) else "?"
-            seg, bus, devfn = int.from_bytes(data[i + 13:i + 15], "little"), data[i + 15], data[i + 16]
-            addr = f"{seg:04x}:{bus:02x}:{devfn >> 3:02x}.{devfn & 7}" if bus != 0xff else "?"
-            rows.append(f"{name}: {addr} ({SLOT_USAGE.get(data[i + 7], 'Unknown')})")
-        if typ == 127:
-            break
-        i = end + 2
-    return rows
 
 
 def tail_lines(path, n):
@@ -149,12 +118,13 @@ class Agent:
         sysinfo = self.hw.system()
         return {"hw_fingerprint": self.fingerprint, "agent_version": VERSION, "os_info": sysinfo.get("os_info"),
                 "cpu_model": sysinfo.get("cpu_model"), "ram_total_mb": sysinfo.get("ram_total_mb"),
-                "gpus": [{k: g.get(k) for k in ("index", "bus_id", "vendor", "model", "vram_mb", "driver", "vbios", "uuid")}
+                "gpus": [{k: g.get(k) for k in ("index", "bus_id", "vendor", "model", "vram_mb", "driver", "vbios", "uuid", "slot")}
                          for g in self.gpus]}
 
     def rescan(self, force=False):
         gpus = self.hw.scan()
-        changed = [g["bus_id"] + g["model"] for g in gpus] != [g["bus_id"] + g["model"] for g in getattr(self, "gpus", [])]
+        key = lambda gs: [(g["bus_id"], g["model"], g.get("slot")) for g in gs]  # noqa: E731
+        changed = key(gpus) != key(getattr(self, "gpus", []))
         self.gpus = gpus
         self.last_hw_scan = time.monotonic()
         problem = getattr(self.hw, "problem", None)
@@ -378,34 +348,14 @@ class Agent:
     def slot_report(self):
         """Kartın takılı olduğu fiziksel yuva: anakartın yuva tablosu (SMBIOS), ACPI yuvaları ve PCI ağacı."""
         parts = []
-        code, out = run(["dmidecode", "-t", "slot"], timeout=20)
-        slots, cur = [], {}
-        for line in out.splitlines() if code == 0 else []:
-            line = line.strip()
-            if line.startswith("Handle"):
-                cur = {}
-                slots.append(cur)
-            elif ":" in line:
-                k, v = line.split(":", 1)
-                cur[k.strip()] = v.strip()
-        rows = [f"{s.get('Designation', '?')}: {s.get('Bus Address', '?')} ({s.get('Current Usage', '?')}, {s.get('Type', '?')})"
-                for s in slots if "Designation" in s]
-        if code == 127:  # dmidecode kurulu değilse tablo çekirdekten okunur
-            rows, code = smbios_slots(), 0
-        parts.append("── anakart yuva tablosu (dmidecode) ──\n" + ("\n".join(rows) or
-                     ("dmidecode bu sistemde yok" if code == 127 else "anakart yuva bilgisi vermiyor")))
-        acpi = []
-        base = "/sys/bus/pci/slots"
-        for name in sorted(os.listdir(base)) if os.path.isdir(base) else []:
-            try:
-                with open(os.path.join(base, name, "address")) as f:
-                    acpi.append(f"yuva {name}: {f.read().strip()}")
-            except OSError:
-                pass
+        rows = [f"{name}: {addr or '?'} ({usage})" for name, addr, usage in slots.smbios()]
+        parts.append("── anakart yuva tablosu ──\n" + ("\n".join(rows) or "anakart yuva bilgisi vermiyor"))
+        acpi = [f"yuva {name}: {addr}" for name, addr in slots.acpi()]
         parts.append("── ACPI yuvaları ──\n" + ("\n".join(acpi) or "yok"))
         code, out = run(["lspci", "-tv"], timeout=20)
         parts.append("── PCI ağacı ──\n" + (out.strip() if code == 0 else "okunamadı"))
-        cards = [f"{g.get('bus_id')}: {g.get('model')}" for g in getattr(self, "gpus", [])]
+        cards = [f"{g.get('bus_id')}: {g.get('model')}" + (f" · yuva {g['slot']}" if g.get("slot") else "")
+                 for g in getattr(self, "gpus", [])]
         parts.append("── kartlar ──\n" + ("\n".join(cards) or "yok"))
         return "\n".join(parts)
 

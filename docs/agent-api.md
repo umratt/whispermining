@@ -127,13 +127,14 @@ Kartların **tam listesi** gönderilir. Listede olmayan kart sunucuda "kayıp" o
   "ram_total_mb": 3900,
   "gpus": [
     { "index": 0, "bus_id": "01:00.0", "vendor": "amd",    "model": "AMD Radeon RX 580 8GB", "vram_mb": 8192, "driver": "amdgpu 22.20", "vbios": "113-1E3871U-O4C" },
-    { "index": 1, "bus_id": "03:00.0", "vendor": "nvidia", "model": "NVIDIA P106-100", "vram_mb": 6144, "driver": "535.183.01", "uuid": "GPU-…" }
+    { "index": 1, "bus_id": "03:00.0", "vendor": "nvidia", "model": "NVIDIA P106-100", "vram_mb": 6144, "driver": "535.183.01", "uuid": "GPU-…", "slot": "J6B1" }
   ]
 }
 ```
 
 - `bus_id` kartın kalıcı kimliğidir (PCI adresi, `lspci` / `nvidia-smi --query-gpu=pci.bus_id`). İstatistikler ve OC bu alanla eşleşir.
 - `vendor`: `nvidia` veya `amd`. En fazla 32 kart.
+- `slot` (isteğe bağlı): kartın takılı olduğu anakart yuvasının adı (SMBIOS yuva tablosundan, ör. `J6B1`). Bilinmiyorsa `null`; panelde kartın yanında gösterilir.
 - Yanıt: `{ "ok": true, "gpus": 6, "config_version": 4, … }`. Kart listesi değiştiyse `config_version` artar (OC listesi yenilenir).
 
 ## 4. İstatistik: `POST /stats`

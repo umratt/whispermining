@@ -148,7 +148,7 @@ router.put('/hardware', (req, res) => {
       if (!busId || !vendor || seen.has(busId)) return;
       seen.add(busId);
       const vals = [Number.isInteger(g.index) ? g.index : i, vendor, str(g.model, 80) || 'Bilinmeyen GPU',
-        Number.isFinite(Number(g.vram_mb)) ? Math.round(g.vram_mb) : null, str(g.driver, 40), str(g.vbios, 60), str(g.uuid, 80)];
+        Number.isFinite(Number(g.vram_mb)) ? Math.round(g.vram_mb) : null, str(g.driver, 40), str(g.vbios, 60), str(g.uuid, 80), str(g.slot, 40)];
       const uuid = vals[6];
       const row = (uuid && rows.find((r) => !used.has(r.id) && r.uuid === uuid))
         || rows.find((r) => !used.has(r.id) && r.bus_id === busId && !(uuid && r.uuid && list.some((x) => x.uuid === r.uuid)));
@@ -167,12 +167,12 @@ router.put('/hardware', (req, res) => {
       if (row) {
         if (!row.present || row.bus_id !== busId) changed = true;
         if (row.model !== vals[2]) { changed = true; run('UPDATE gpus SET is_new = 1, oc_profile_id = NULL WHERE id = ?', row.id); }
-        run('UPDATE gpus SET bus_id=?, idx=?, vendor=?, model=?, vram_mb=?, driver=?, vbios=?, uuid=?, present=1, last_seen=? WHERE id=?',
+        run('UPDATE gpus SET bus_id=?, idx=?, vendor=?, model=?, vram_mb=?, driver=?, vbios=?, uuid=?, slot=?, present=1, last_seen=? WHERE id=?',
           busId, ...vals, t, row.id);
       } else {
         changed = true;
-        run(`INSERT INTO gpus (rig_id, bus_id, idx, vendor, model, vram_mb, driver, vbios, uuid, present, is_new, first_seen, last_seen)
-             VALUES (?,?,?,?,?,?,?,?,?,1,?,?,?)`, req.rig.id, busId, ...vals, hadGpus && !moved ? 1 : 0, t, t);
+        run(`INSERT INTO gpus (rig_id, bus_id, idx, vendor, model, vram_mb, driver, vbios, uuid, slot, present, is_new, first_seen, last_seen)
+             VALUES (?,?,?,?,?,?,?,?,?,?,1,?,?,?)`, req.rig.id, busId, ...vals, hadGpus && !moved ? 1 : 0, t, t);
       }
     }
     if (changed) run('UPDATE rigs SET config_version = config_version + 1 WHERE id = ?', req.rig.id); // OC listesi değişti

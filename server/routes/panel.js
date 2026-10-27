@@ -285,7 +285,7 @@ router.get('/rigs/:id', (req, res) => {
   const summary = rigSummary({ ...r, fs_name: fs?.name, fs_coin: fs?.coin, fs_algo: fs?.algo,
     open_alerts: get('SELECT COUNT(*) AS n FROM alerts WHERE rig_id = ? AND resolved_at IS NULL', r.id).n }, t);
   const eff = new Map(rigsSvc.effectiveOc(r.id).map((g) => [g.id, g]));
-  const gpus = all(`SELECT id, bus_id, idx, vendor, model, vram_mb, driver, vbios, present, oc_profile_id, oc_params, is_new,
+  const gpus = all(`SELECT id, bus_id, idx, vendor, model, vram_mb, driver, vbios, slot, present, oc_profile_id, oc_params, is_new,
                     hashrate, temp, mem_temp, fan, power, core_clk, mem_clk, accepted, rejected, stats_at
                     FROM gpus WHERE rig_id = ? ORDER BY idx`, r.id)
     .map((g) => ({ ...g, present: !!g.present, is_new: !!g.is_new, fresh: summary.online && g.stats_at >= t - ONLINE_SEC,

@@ -98,7 +98,7 @@ export async function rigView(el, [rigId]) {
               <td class="hide-sm">${g.idx}</td>
               <td><div style="display:flex;align-items:center;gap:6px"><span class="badge ${g.vendor}">${g.vendor === 'nvidia' ? 'NV' : 'AMD'}</span>
                 <span class="model">${g.model}</span>${g.present ? '' : html`<span class="badge bad">Kayıp</span>`}${g.present && g.is_new ? html`<span class="badge warn">Yeni</span>` : ''}</div>
-                <div class="small dim"><span class="show-sm-i">GPU ${g.idx} · </span>${g.bus_id} · ${g.vram_mb ? `${Math.round(g.vram_mb / 1024)} GB` : '?'}${g.driver ? ` · ${g.driver}` : ''}</div></td>
+                <div class="small dim"><span class="show-sm-i">GPU ${g.idx} · </span>${g.bus_id}${g.slot ? ` · Yuva ${g.slot}` : ''} · ${g.vram_mb ? `${Math.round(g.vram_mb / 1024)} GB` : '?'}${g.driver ? ` · ${g.driver}` : ''}</div></td>
               <td class="r">${live ? fmtHash(g.hashrate) : '—'}${live ? html`<div class="small dim show-sm">${fmtPower(g.power)} · ${fmtPct(g.fan)}</div>` : ''}</td>
               <td class="r ${live ? tempClass(g.temp) : ''}">${live ? fmtTemp(g.temp) : '—'}</td>
               <td class="r hide-md ${live ? tempClass(g.mem_temp, (state.me?.temp_limit ?? 80) + 20) : ''}">${live && g.mem_temp !== null ? fmtTemp(g.mem_temp) : '—'}</td>
@@ -404,7 +404,7 @@ export async function rigView(el, [rigId]) {
       title: `GPU ${g.idx} · ${g.model}`,
       wide: true,
       body: html`
-        <div class="small dim"><span class="show-sm-i">GPU ${g.idx} · </span>${g.bus_id} · ${g.vram_mb ? `${Math.round(g.vram_mb / 1024)} GB` : ''} ${g.vbios ? `· VBIOS ${g.vbios}` : ''} ${g.driver ? `· Sürücü ${g.driver}` : ''}</div>
+        <div class="small dim"><span class="show-sm-i">GPU ${g.idx} · </span>${g.bus_id}${g.slot ? ` · Yuva ${g.slot}` : ''} · ${g.vram_mb ? `${Math.round(g.vram_mb / 1024)} GB` : ''} ${g.vbios ? `· VBIOS ${g.vbios}` : ''} ${g.driver ? `· Sürücü ${g.driver}` : ''}</div>
         <div class="gpu-charts">
           <div><h3 class="small muted">Hashrate</h3><div class="chart-box" style="height:150px"><canvas data-c="1"></canvas></div></div>
           <div><h3 class="small muted">Sıcaklık</h3><div class="chart-box" style="height:150px"><canvas data-c="2"></canvas></div></div>
