@@ -170,6 +170,17 @@ router.get('/rigs/:id/rig-conf-text', (req, res) => {
   res.json(confResponse(r, secret));
 });
 
+// ---- Rig ekranını izleme ----
+// Pencere açıkken panel bunu birkaç saniyede bir çağırır; izleme 60 sn içinde yenilenmezse agent ekran göndermeyi bırakır.
+router.get('/rigs/:id/screen', (req, res) => {
+  const r = rigsSvc.ownedRig(req.user.id, req.params.id);
+  if (!r) return bad(res, 'Rig bulunamadı.', 404);
+  run('UPDATE rigs SET screen_watch_until = ? WHERE id = ?', now() + 60, r.id);
+  res.set('Cache-Control', 'no-store');
+  res.json({ text: r.screen_text, log: r.screen_log, at: r.screen_at, server_time: now(),
+    online: !!r.last_seen_at && r.last_seen_at >= now() - ONLINE_SEC, agent_version: r.agent_version });
+});
+
 // rig.conf ile ekleme: rig önceden oluşturulur ve hesaba bağlanır. Agent dosyadaki anahtarla doğrudan bağlanır.
 router.post('/rigs', sec.rateLimit({ windowSec: 600, max: 30, key: (req) => `rigcreate:${req.user.id}` }), (req, res) => {
   const name = str(req.body.name, 40);

@@ -92,6 +92,32 @@ export async function setupView(el) {
           </ol>`)}
       </div>
 
+      <div class="card section" id="komutlar">
+        <div class="card-head"><h2>Rig başında komutlar</h2></div>
+        <div class="card-pad">
+          <p class="muted" style="margin:0 0 12px">Rig'e monitör ve klavye takınca <strong>canlı durum ekranı</strong> açılır (kart kart hashrate, sıcaklık, share; 3 saniyede bir yenilenir).
+            Komut yazmak için klavyeden <strong>Alt+F2</strong>'ye basın, ekrana dönmek için <strong>Alt+F1</strong>. Aynı ekranı paneldeki rig sayfasından <strong>Ekranı göster</strong> ile de görebilirsiniz.</p>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Komut</th><th>Ne yapar</th></tr></thead>
+            <tbody>
+              <tr><td class="mono" style="font-size:13px">wm</td><td>Canlı durum ekranı (çıkmak için Ctrl+C)</td></tr>
+              <tr><td class="mono" style="font-size:13px">miner</td><td>Miner'ın kendi canlı çıktısı (çıkmak için Ctrl+C)</td></tr>
+              <tr><td class="mono" style="font-size:13px">miner start</td><td>Miner'ı başlat</td></tr>
+              <tr><td class="mono" style="font-size:13px">miner stop</td><td>Miner'ı durdur (rig yeniden açılınca da başlamaz)</td></tr>
+              <tr><td class="mono" style="font-size:13px">miner restart</td><td>Miner'ı yeniden başlat</td></tr>
+              <tr><td class="mono" style="font-size:13px">wm oc</td><td>Panelde atanmış OC değerlerini tekrar uygula</td></tr>
+              <tr><td class="mono" style="font-size:13px">wm log</td><td>Agent kaydını canlı göster</td></tr>
+              <tr><td class="mono" style="font-size:13px">wm bilgi</td><td>Rig adı, rig kimliği, panel bağlantısı, sürüm</td></tr>
+              <tr><td class="mono" style="font-size:13px">wm guncelle</td><td>Agent güncellemesini hemen kontrol et</td></tr>
+              <tr><td class="mono" style="font-size:13px">sreboot</td><td>Rig'i yeniden başlat</td></tr>
+              <tr><td class="mono" style="font-size:13px">wm yardim</td><td>Komut listesini göster</td></tr>
+            </tbody>
+          </table></div>
+          <p class="hint" style="margin:10px 0 0">Komutlar agent 1.0.5 ve sonrasında vardır; eski flash'lar internete bağlanınca kendiliğinden güncellenir.
+            Alt+F2 konsolu sadece rig başındaki klavye içindir; uzaktan (SSH) erişim yine sadece anahtarla açılır.</p>
+        </div>
+      </div>
+
       <div class="card section">
         <div class="card-head"><h2>Sorun giderme</h2></div>
         <div class="faq">

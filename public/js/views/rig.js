@@ -56,6 +56,7 @@ export async function rigView(el, [rigId]) {
     : html`<button class="btn primary" data-cmd="miner_start" ${r.online && r.flight_sheet_id ? '' : 'disabled'}>${icon('play')}Başlat</button>`}
           <button class="btn" data-cmd="miner_restart" ${r.online && running ? '' : 'disabled'}>${icon('restart')}<span class="hide-sm">Miner'ı yeniden başlat</span></button>
           <button class="btn" data-cmd="reboot" ${r.online ? '' : 'disabled'}>${icon('power')}<span class="hide-sm">Rig'i yeniden başlat</span></button>
+          <button class="btn" data-screen>${icon('rigs')}Ekranı göster</button>
           <button class="btn" data-edit>${icon('edit')}Ayarlar</button>
         </div>
       </div>`);
@@ -425,10 +426,52 @@ export async function rigView(el, [rigId]) {
     dlg.addEventListener('close', () => gpuCharts.forEach((c) => c?.destroy()));
   }
 
+  // Rig'in monitöründeki canlı ekran + miner çıktısı (agent 1.0.6+). Pencere açıkken 3 sn'de bir yenilenir.
+  function screenDialog() {
+    let poll = null;
+    const pre = 'margin:0;padding:12px;border-radius:8px;background:#0d1117;color:#d1d7e0;font:12px/1.45 ui-monospace,Consolas,monospace;'
+      + 'white-space:pre;overflow:auto;flex-shrink:0';
+    openDialog({
+      title: 'Rig ekranı',
+      wide: true,
+      body: html`
+        <div class="small muted" data-screen-meta>Rig'den ekran isteniyor…</div>
+        <pre data-screen-text style="${pre};min-height:180px">Bekleniyor… (rig birkaç saniye içinde göndermeye başlar)</pre>
+        <h3 style="margin:4px 0 0">Miner çıktısı</h3>
+        <pre data-screen-log style="${pre};max-height:260px"></pre>`,
+      onOpen: (dlg) => {
+        const meta = dlg.querySelector('[data-screen-meta]');
+        const textEl = dlg.querySelector('[data-screen-text]');
+        const logEl = dlg.querySelector('[data-screen-log]');
+        const tick = async () => {
+          try {
+            const s = await api(`rigs/${rigId}/screen`);
+            const age = s.at ? s.server_time - s.at : null;
+            const old = /^1\.0\.[0-5]$/.test(s.agent_version || '');
+            meta.textContent = !s.online ? 'Rig çevrimdışı. Aşağıdaki son görüntü.'
+              : old ? `Bu özellik agent 1.0.6 ile geliyor (rig'de ${s.agent_version}). Rig güncellenince ekran burada görünür.`
+              : age === null || age > 20 ? 'Rig ekran göndermeye başlıyor… (10 sn kadar sürebilir)'
+              : `Canlı · ${age} sn önce güncellendi`;
+            if (s.text) textEl.textContent = s.text;
+            if (s.log !== null && s.log !== undefined) {
+              const atBottom = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 20;
+              logEl.textContent = s.log || '(miner çalışmıyor)';
+              if (atBottom) logEl.scrollTop = logEl.scrollHeight;
+            }
+          } catch (err) { meta.textContent = err.message; }
+        };
+        tick();
+        poll = setInterval(tick, 3000);
+        dlg.addEventListener('close', () => clearInterval(poll));
+      },
+    });
+  }
+
   el.addEventListener('click', (e) => {
     const cmd = e.target.closest('[data-cmd]');
     if (cmd && !cmd.disabled) return sendCommand(cmd.dataset.cmd);
     if (e.target.closest('[data-edit]')) return editDialog().catch((err) => toast(err.message, 'bad'));
+    if (e.target.closest('[data-screen]')) return screenDialog();
     const tb = e.target.closest('[data-tune],[data-tune-cancel],[data-tune-dismiss],[data-tune-apply],[data-tune-apply-cards]');
     if (tb && !tb.disabled) return tuneAction(tb).catch((err) => toast(err.message, 'bad'));
     const row = e.target.closest('[data-gpu]');

@@ -272,6 +272,13 @@ const MIGRATIONS = [
   `
   CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT);
   `,
+  // v10: rig'in ekranı panelden izlenebilir (sadece biri izlerken gönderilir)
+  `
+  ALTER TABLE rigs ADD COLUMN screen_text TEXT;
+  ALTER TABLE rigs ADD COLUMN screen_log TEXT;
+  ALTER TABLE rigs ADD COLUMN screen_at INTEGER;
+  ALTER TABLE rigs ADD COLUMN screen_watch_until INTEGER;
+  `,
 ];
 
 function migrate() {

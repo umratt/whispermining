@@ -2,6 +2,7 @@
 import json
 import logging
 import os
+import re
 import socket
 import subprocess
 import time
@@ -12,6 +13,21 @@ from .api import Api, ApiError
 from .hw import backend
 from .miners import SPECS, MinerError, MinerProcess, download_miner
 from .util import log
+
+ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\r")
+
+
+def tail_lines(path, n):
+    """Dosyanın son n satırı, renk kodları temizlenmiş (panelde düz yazı gösterilir)."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 24000))
+            text = f.read().decode(errors="replace")
+    except OSError:
+        return []
+    return [ANSI.sub("", line) for line in text.splitlines()[-n:]]
+
 
 STOP_FLAG = os.path.join(config.STATE_DIR, "miner-stopped")   # kullanıcı durdurduysa açılışta da başlatma
 MINER_CACHE = os.path.join(config.STATE_DIR, "miners")
@@ -40,6 +56,7 @@ class Agent:
         self.next_update_check = time.monotonic() + 120
         self.view = {"server": self.server}
         self.tuner = None          # çalışan otomatik OC (varsa)
+        self.want_screen = False   # panelde biri rig ekranını izliyor
         self.last_rows = []
 
     # ---------- kimlik ----------
@@ -392,7 +409,10 @@ class Agent:
             miners_ok = bool(self.miners) and all(p.running() for _s, p, _g in self.miners)
             self.tuner.feed(payload["gpus"], miners_ok, restarts)
             payload["tune"] = self.tuner.status()
+        if self.want_screen:
+            payload["screen"] = self.screen_payload()
         res = self.api.stats(payload)
+        self.want_screen = bool(res.get("want_screen"))
         self.view["connection"] = "bağlı"
         if self.tuner:
             self.step_tuner()
@@ -424,6 +444,14 @@ class Agent:
                 next_screen = time.monotonic() + 3
                 self.refresh_screen()
             time.sleep(1)
+
+    def screen_payload(self):
+        """Panelde 'Ekranı göster': canlı ekranın düz yazısı + miner çıktısının son satırları."""
+        lines = []
+        for _s, proc, _g in self.miners:
+            lines += [f"── {proc.spec.name} ──"] + tail_lines(proc.log_path, 60)
+        log_text = "\n".join(lines)[-15000:]
+        return {"text": display.render(self.view), "log": log_text}
 
     def refresh_screen(self):
         """Monitördeki canlı ekran (HiveOS gibi): kart kart hashrate, sıcaklık, share; her 3 sn'de bir."""

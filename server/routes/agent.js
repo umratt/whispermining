@@ -15,6 +15,7 @@ const str = (v, max = 200) => (v === undefined || v === null ? null : String(v).
 const COMMAND_TYPES = new Set(['miner_start', 'miner_stop', 'miner_restart', 'reboot', 'apply_oc', 'oc_tune', 'oc_tune_cancel']);
 // Otomatik OC uzun sürer: rig'e gönderildikten sonra bu kadar süre sonuç beklenir
 const LONG_COMMANDS = { oc_tune: 4 * 3600 };
+const SCREEN_POLL_SEC = 3; // panelde ekran izlenirken agent'ın bağlanma aralığı
 
 function newPairingCode() {
   for (let i = 0; i < 10; i++) {
@@ -44,7 +45,10 @@ function requirePaired(req, res, next) {
 // Agent her yanıttan "ayar değişti mi / komut var mı" bilgisini öğrenir
 function syncHints(rig) {
   const pending = get(`SELECT COUNT(*) AS n FROM commands WHERE rig_id = ? AND status = 'queued'`, rig.id).n;
-  return { config_version: rig.config_version, pending_commands: pending, poll_interval_sec: config.agentPollSec, server_time: now() };
+  // Panelde biri rig ekranını izliyorsa agent ekranı gönderir ve daha sık bağlanır
+  const watching = (rig.screen_watch_until || 0) > now();
+  return { config_version: rig.config_version, pending_commands: pending, server_time: now(),
+    poll_interval_sec: watching ? SCREEN_POLL_SEC : config.agentPollSec, want_screen: watching };
 }
 
 // 1) Kayıt
@@ -151,6 +155,11 @@ router.put('/hardware', (req, res) => {
 // 4) Periyodik istatistik
 router.post('/stats', requirePaired, (req, res) => {
   const { unknownGpus } = ingestStats(req.rig, req.body || {});
+  const screen = (req.body || {}).screen;
+  if (screen && typeof screen === 'object') {
+    run('UPDATE rigs SET screen_text = ?, screen_log = ?, screen_at = ? WHERE id = ?',
+      str(screen.text, 8000), str(screen.log, 16000), now(), req.rig.id);
+  }
   const tune = (req.body || {}).tune;
   if (tune && typeof tune === 'object') {
     const prev = rigsSvc.parseJson(req.rig.tune_state, {}) || {};
