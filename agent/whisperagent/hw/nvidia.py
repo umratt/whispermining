@@ -14,6 +14,35 @@ SENSOR_FIELDS = "pci.bus_id,temperature.gpu,fan.speed,power.draw,clocks.sm,clock
 STUCK_BACKOFF_SEC = 600
 _state = {"skip_until": 0.0, "problem": None}
 
+# Sürücünün başlatamadığı kart (bozuk riser, gevşek güç kablosu) her nvidia-smi çağrısında 1-2 dk yeniden denenir ve
+# rig'deki bütün kartları görünmez yapar. Böyle bir kart PCI veriyolundan çıkarılır (sadece bu açılış için; yeniden
+# başlatınca tekrar denenir), kalan kartlar kazmaya devam eder.
+FAILED_RE = re.compile(r"NVRM: GPU ([0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]): (?:RmInitAdapter|rm_init_adapter) failed", re.I)
+disabled = {}  # "0000:08:00.0" → neden
+
+
+def disable_failed():
+    """dmesg'de başlatılamadığı yazan kartları devre dışı bırak. Yeni bir kart bırakıldıysa True."""
+    code, out = run(["dmesg"], timeout=10)
+    if code != 0:
+        return False
+    changed = False
+    for bus in dict.fromkeys(m.group(1).lower() for m in FAILED_RE.finditer(out)):
+        dev = f"/sys/bus/pci/devices/{bus}"
+        if bus in disabled or not glob.glob(dev):
+            continue
+        # sysfs yazımı sürücü meşgulken bekleyebilir: ayrı süreçte, süre sınırıyla
+        rc, msg = run(["sh", "-c", f"echo 1 > {dev}/remove"], timeout=20)
+        if rc == 0:
+            disabled[bus] = "sürücü kartı başlatamadı (RmInitAdapter failed)"
+            log.error("Kart %s başlatılamadı, devre dışı bırakıldı: riser ve güç kablosunu kontrol edin", bus)
+            changed = True
+        else:
+            log.warning("Kart %s devre dışı bırakılamadı: %s", bus, msg.strip()[:200])
+    if changed:
+        _state["skip_until"] = 0.0  # kalan kartlarla hemen tekrar dene
+    return changed
+
 
 def _query(fields):
     if time.monotonic() < _state["skip_until"]:
@@ -46,10 +75,15 @@ def pci_count():
 
 
 def problem(found):
-    """Takılı olan NVIDIA kartı varsa, kullanıcıya gösterilecek açıklama (dmesg'deki NVRM satırlarıyla)."""
+    """Çalışmayan NVIDIA kartı varsa kullanıcıya gösterilecek açıklama (dmesg'deki NVRM satırlarıyla)."""
+    off = ""
+    if disabled:
+        buses = ", ".join(b[5:] for b in disabled)
+        off = (f"{len(disabled)} kart başlatılamadığı için devre dışı bırakıldı ({buses}): riser'ını ve güç kablosunu "
+               f"kontrol edin, gerekirse kartı değiştirin. Diğer kartlar çalışıyor.")
     pci = pci_count()
     if not pci or found >= pci:
-        return None
+        return off or None
     msg = _state["problem"] or "NVIDIA sürücüsü kartları görmüyor"
     msg = f"{pci} NVIDIA kart takılı, {found} tanesi çalışıyor. {msg}."
     code, out = run(["dmesg"], timeout=5)
@@ -58,7 +92,7 @@ def problem(found):
         msg += " Sürücü: " + " | ".join(dict.fromkeys(nvrm[-4:]))[:400]
     if any(re.search(r"BAR\d? is 0M|invalid|resource", l) for l in nvrm):
         msg += " → BIOS'ta 'Above 4G Decoding' açılmalı."
-    return msg
+    return f"{off} {msg}" if off else msg
 
 
 def model_name(name):
@@ -67,6 +101,8 @@ def model_name(name):
 
 
 def scan():
+    if pci_count():
+        disable_failed()
     gpus = []
     for idx, bus, name, mem, driver, vbios, uuid in _query(SCAN_FIELDS):
         gpus.append({

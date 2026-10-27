@@ -408,3 +408,46 @@ class HangTest(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 a.hang_guard()
         ex.assert_called_once_with(3)
+
+
+class FailedCardTest(unittest.TestCase):
+    """Sürücünün başlatamadığı tek kart bütün rig'i durdurmasın: PCI'dan çıkarılır, diğerleri çalışır."""
+
+    DMESG = ("[15:25:38] [drm] [nvidia-drm] [GPU ID 0x00000800] Loading driver\n"
+             "[15:27:23] NVRM: GPU 0000:08:00.0: RmInitAdapter failed! (0x25:0x65:1636)\n"
+             "[15:27:23] NVRM: GPU 0000:08:00.0: rm_init_adapter failed, device minor number 5\n"
+             "[15:28:40] NVRM: GPU 0000:08:00.0: RmInitAdapter failed! (0x25:0x65:1636)\n")
+
+    def setUp(self):
+        from whisperagent.hw import nvidia
+        self.nv = nvidia
+        nvidia.disabled.clear()
+        nvidia._state.update(skip_until=0.0, problem=None)
+
+    tearDown = setUp
+
+    def test_failed_card_removed_once(self):
+        from unittest import mock
+        calls = []
+
+        def fake_run(cmd, timeout=20):
+            calls.append(cmd)
+            return (0, self.DMESG) if cmd == ["dmesg"] else (0, "")
+        self.nv._state["skip_until"] = time.monotonic() + 600
+        with mock.patch.object(self.nv, "run", side_effect=fake_run), mock.patch.object(self.nv.glob, "glob", return_value=["x"]):
+            self.assertTrue(self.nv.disable_failed())
+            self.assertFalse(self.nv.disable_failed())  # ikinci kez çıkarılmaz
+        removes = [c for c in calls if c[0] == "sh"]
+        self.assertEqual(removes, [["sh", "-c", "echo 1 > /sys/bus/pci/devices/0000:08:00.0/remove"]])
+        self.assertEqual(self.nv._state["skip_until"], 0.0)  # kalan kartlar hemen sorgulanır
+        with mock.patch.object(self.nv, "pci_count", return_value=6):
+            msg = self.nv.problem(6)
+        self.assertIn("1 kart başlatılamadığı için devre dışı bırakıldı (08:00.0)", msg)
+
+    def test_no_failure_no_action(self):
+        from unittest import mock
+        with mock.patch.object(self.nv, "run", return_value=(0, "[1.0] NVRM: loading NVIDIA UNIX x86_64 Kernel Module\n")) as run:
+            self.assertFalse(self.nv.disable_failed())
+        self.assertEqual(run.call_count, 1)
+        with mock.patch.object(self.nv, "pci_count", return_value=6):
+            self.assertIsNone(self.nv.problem(6))
