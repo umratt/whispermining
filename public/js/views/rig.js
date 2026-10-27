@@ -226,6 +226,17 @@ export async function rigView(el, [rigId]) {
       <div class="card-pad"><div class="callout warn">${t.message || 'Bilinmeyen bir sorun oluştu.'}</div>${historyTable(t.card_list)}</div>`);
   }
 
+  // Komut sonucu: kısa olan satırda, uzun olan (miner kaydı, otomatik OC verisi) açılır kutuda; satırlar kırılır
+  function commandResult(c) {
+    if (!c.result) return '';
+    const text = c.result;
+    if (c.type === 'oc_tune') {
+      try { const r = JSON.parse(text); if (r.summary) return html`<div class="small dim">${r.summary}</div>`; } catch { /* düz yazı */ }
+    }
+    if (text.length <= 160 && !text.includes('\n')) return html`<div class="small dim" style="overflow-wrap:anywhere">${text}</div>`;
+    return html`<details><summary class="small dim" style="cursor:pointer">Çıktıyı göster (${text.split('\n').length} satır)</summary><pre class="cmd-out">${text}</pre></details>`;
+  }
+
   function renderSide() {
     const r = data.rig;
     el.querySelector('#rig-side').innerHTML = String(html`
@@ -235,7 +246,7 @@ export async function rigView(el, [rigId]) {
           ${data.commands.length ? html`<ul class="list-plain">
             ${data.commands.map((c) => {
     const [l, cls] = COMMAND_STATUS[c.status] || ['?', ''];
-    return html`<li><span class="grow">${COMMAND_LABELS[c.type] || c.type}${c.result ? html`<div class="small dim">${c.result}</div>` : ''}</span>
+    return html`<li style="align-items:flex-start"><span class="grow">${COMMAND_LABELS[c.type] || c.type}${c.cmd ? html` <span class="mono small">${c.cmd}</span>` : ''}${commandResult(c)}</span>
                 <span class="small dim">${dateTime(c.created_at)}</span><span class="badge ${cls}">${l}</span></li>`;
   })}</ul>` : html`<div class="empty small">Henüz komut gönderilmedi.</div>`}
         </div>

@@ -297,7 +297,7 @@ router.get('/rigs/:id', (req, res) => {
   const models = all(`SELECT model, vendor, COUNT(*) AS count FROM gpus WHERE rig_id = ? AND present = 1
                       GROUP BY model, vendor ORDER BY vendor, model`, r.id)
     .map((m) => ({ ...m, oc_profile_id: assigned.get(m.model) ?? null }));
-  const commands = all(`SELECT id, type, status, created_at, finished_at, exit_code, result FROM commands
+  const commands = all(`SELECT id, type, status, created_at, finished_at, exit_code, result, CASE WHEN json_valid(payload) THEN json_extract(payload, '$.cmd') END AS cmd FROM commands
                         WHERE rig_id = ? ORDER BY id DESC LIMIT 15`, r.id);
   const alerts = all(`SELECT id, type, severity, message, started_at, resolved_at FROM alerts
                       WHERE rig_id = ? ORDER BY resolved_at IS NOT NULL, started_at DESC LIMIT 20`, r.id);

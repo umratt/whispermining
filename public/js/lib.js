@@ -161,6 +161,8 @@ export function openDialog({ title, body, submitLabel = 'Kaydet', danger = false
     } finally { btn.disabled = false; }
   });
   dlg.addEventListener('close', () => dlg.remove());
+  // Kaydı olmayan pencereler (ekran, grafik) dışına dokununca kapanır: telefonda kapatma düğmesi görünmese de çıkılabilsin
+  if (!onSubmit) dlg.addEventListener('click', (e) => { if (e.target === dlg) dlg.close(); });
   dlg.showModal();
   onOpen?.(dlg);
   return dlg;
