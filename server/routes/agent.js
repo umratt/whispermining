@@ -157,7 +157,8 @@ router.put('/hardware', (req, res) => {
     });
     // Eşlenmeyen eski kayıtlar: makine değiştiyse ya da yuvası artık başka kartındaysa silinir, yoksa "kayıp" olur
     for (const r of rows.filter((x) => !used.has(x.id))) {
-      if (moved || seen.has(r.bus_id)) { run('DELETE FROM gpus WHERE id = ?', r.id); changed = true; }
+      const dup = r.uuid && plan.some((p) => p.vals[6] === r.uuid); // aynı kartın eski yuvadaki kaydı
+      if (moved || dup || seen.has(r.bus_id)) { run('DELETE FROM gpus WHERE id = ?', r.id); changed = true; }
       else if (r.present) { run('UPDATE gpus SET present = 0 WHERE id = ?', r.id); changed = true; } // uyarı motoru yakalar
     }
     // Yuvası değişen kartlar: UNIQUE(rig_id, bus_id) çakışmasın diye önce geçici adrese
@@ -194,7 +195,10 @@ router.post('/stats', requirePaired, (req, res) => {
     const json = JSON.stringify({ ...tune, result_profile_id: prev.result_profile_id, updated_at: now() });
     if (json.length <= TUNE_MAX) run('UPDATE rigs SET tune_state = ? WHERE id = ?', json, req.rig.id); // aşırı büyükse yok say
   }
-  res.json({ ok: true, hardware_required: unknownGpus > 0, ...syncHints(req.rig) });
+  // Aynı kartın eski yuvada kalmış kaydı varsa (eski panel sürümünden) agent kart listesini yeniden göndersin
+  const stale = get(`SELECT 1 FROM gpus a JOIN gpus b ON b.rig_id = a.rig_id AND b.uuid = a.uuid AND b.id != a.id
+                     WHERE a.rig_id = ? AND a.present = 0 AND b.present = 1 LIMIT 1`, req.rig.id);
+  res.json({ ok: true, hardware_required: unknownGpus > 0 || !!stale, ...syncHints(req.rig) });
 });
 
 // 5) Güncel ayarlar (flight sheet + OC)
