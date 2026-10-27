@@ -358,6 +358,15 @@ router.put('/rigs/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+// Artık takılı olmayan kartları listeden ve geçmişten sil (istatistikler ON DELETE CASCADE ile gider)
+router.delete('/rigs/:id/lost-gpus', (req, res) => {
+  const r = rigsSvc.ownedRig(req.user.id, req.params.id);
+  if (!r) return bad(res, 'Rig bulunamadı.', 404);
+  const n = run('DELETE FROM gpus WHERE rig_id = ? AND present = 0', r.id).changes;
+  if (n) run('UPDATE rigs SET config_version = config_version + 1 WHERE id = ?', r.id);
+  res.json({ ok: true, deleted: Number(n) });
+});
+
 router.put('/rigs/:id/gpus/:gpuId', (req, res) => {
   const r = rigsSvc.ownedRig(req.user.id, req.params.id);
   if (!r) return bad(res, 'Rig bulunamadı.', 404);

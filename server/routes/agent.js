@@ -128,6 +128,8 @@ router.put('/hardware', (req, res) => {
   tx(() => {
     // Donanım kimliği: rig.conf başka bir makineye takılırsa (ya da kopyalanırsa) uyarı için işaretle
     const fp = str(b.hw_fingerprint, 128);
+    // Flash başka bir makineye takıldı: eski makinenin kartları "kayıp" diye kalmasın, silinsin
+    const moved = !!(fp && req.rig.hw_fingerprint && fp !== req.rig.hw_fingerprint);
     if (fp && fp !== req.rig.hw_fingerprint) {
       run('UPDATE rigs SET hw_fingerprint = ?, hw_changed_at = ? WHERE id = ?', fp, req.rig.hw_fingerprint ? t : null, req.rig.id);
     }
@@ -136,28 +138,41 @@ router.put('/hardware', (req, res) => {
       str(b.os_info, 200), str(b.agent_version, 32), req.rig.id);
     // İlk donanım bildiriminde tüm kartlar zaten yeni; "yeni kart" sadece sonradan takılanlar için
     const hadGpus = get('SELECT COUNT(*) AS n FROM gpus WHERE rig_id = ?', req.rig.id).n > 0;
+    // Kart önce UUID ile eşlenir (başka yuvaya takılan kart OC ayarıyla aynı kart kalır), UUID yoksa PCI adresiyle
+    const rows = all('SELECT id, bus_id, uuid, present, model FROM gpus WHERE rig_id = ? ORDER BY present DESC, last_seen DESC', req.rig.id);
+    const used = new Set();
+    const plan = [];
     list.forEach((g, i) => {
       const busId = str(g.bus_id, 32);
       const vendor = g.vendor === 'amd' ? 'amd' : g.vendor === 'nvidia' ? 'nvidia' : null;
       if (!busId || !vendor || seen.has(busId)) return;
       seen.add(busId);
-      const existing = get('SELECT id, present, model FROM gpus WHERE rig_id = ? AND bus_id = ?', req.rig.id, busId);
       const vals = [Number.isInteger(g.index) ? g.index : i, vendor, str(g.model, 80) || 'Bilinmeyen GPU',
         Number.isFinite(Number(g.vram_mb)) ? Math.round(g.vram_mb) : null, str(g.driver, 40), str(g.vbios, 60), str(g.uuid, 80)];
-      if (existing) {
-        if (!existing.present) changed = true;
-        if (existing.model !== vals[2]) { changed = true; run('UPDATE gpus SET is_new = 1, oc_profile_id = NULL WHERE id = ?', existing.id); }
-        run('UPDATE gpus SET idx=?, vendor=?, model=?, vram_mb=?, driver=?, vbios=?, uuid=?, present=1, last_seen=? WHERE id=?',
-          ...vals, t, existing.id);
+      const uuid = vals[6];
+      const row = (uuid && rows.find((r) => !used.has(r.id) && r.uuid === uuid))
+        || rows.find((r) => !used.has(r.id) && r.bus_id === busId && !(uuid && r.uuid && list.some((x) => x.uuid === r.uuid)));
+      if (row) used.add(row.id);
+      plan.push({ busId, vals, row });
+    });
+    // Eşlenmeyen eski kayıtlar: makine değiştiyse ya da yuvası artık başka kartındaysa silinir, yoksa "kayıp" olur
+    for (const r of rows.filter((x) => !used.has(x.id))) {
+      if (moved || seen.has(r.bus_id)) { run('DELETE FROM gpus WHERE id = ?', r.id); changed = true; }
+      else if (r.present) { run('UPDATE gpus SET present = 0 WHERE id = ?', r.id); changed = true; } // uyarı motoru yakalar
+    }
+    // Yuvası değişen kartlar: UNIQUE(rig_id, bus_id) çakışmasın diye önce geçici adrese
+    for (const p of plan) if (p.row && p.row.bus_id !== p.busId) run('UPDATE gpus SET bus_id = ? WHERE id = ?', `~${p.row.id}`, p.row.id);
+    for (const { busId, vals, row } of plan) {
+      if (row) {
+        if (!row.present || row.bus_id !== busId) changed = true;
+        if (row.model !== vals[2]) { changed = true; run('UPDATE gpus SET is_new = 1, oc_profile_id = NULL WHERE id = ?', row.id); }
+        run('UPDATE gpus SET bus_id=?, idx=?, vendor=?, model=?, vram_mb=?, driver=?, vbios=?, uuid=?, present=1, last_seen=? WHERE id=?',
+          busId, ...vals, t, row.id);
       } else {
         changed = true;
         run(`INSERT INTO gpus (rig_id, bus_id, idx, vendor, model, vram_mb, driver, vbios, uuid, present, is_new, first_seen, last_seen)
-             VALUES (?,?,?,?,?,?,?,?,?,1,?,?,?)`, req.rig.id, busId, ...vals, hadGpus ? 1 : 0, t, t);
+             VALUES (?,?,?,?,?,?,?,?,?,1,?,?,?)`, req.rig.id, busId, ...vals, hadGpus && !moved ? 1 : 0, t, t);
       }
-    });
-    // Listede olmayan kartlar "kayıp" olarak işaretlenir; uyarı motoru bunu yakalar
-    for (const g of all('SELECT id, bus_id, present FROM gpus WHERE rig_id = ?', req.rig.id)) {
-      if (!seen.has(g.bus_id) && g.present) { run('UPDATE gpus SET present = 0 WHERE id = ?', g.id); changed = true; }
     }
     if (changed) run('UPDATE rigs SET config_version = config_version + 1 WHERE id = ?', req.rig.id); // OC listesi değişti
   });

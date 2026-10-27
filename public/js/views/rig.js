@@ -112,7 +112,10 @@ export async function rigView(el, [rigId]) {
             </tr>`;
   })}
         </tbody>
-      </table>`) : String(html`<div class="empty">Agent henüz kart bilgisi göndermedi.</div>`);
+      </table>
+      ${gpus.some((g) => !g.present) ? html`<div class="small dim" style="padding:10px 12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        Kayıp kartlar artık bu rig'de görünmüyor (çıkarıldı ya da flash başka makineye takıldı).
+        <button class="btn sm" data-clear-lost>Kayıp kartları sil</button></div>` : ''}`) : String(html`<div class="empty">Agent henüz kart bilgisi göndermedi.</div>`);
   }
 
   const PHASES = { baseline: 'Taban ölçüm', mem: 'Bellek', power: 'Güç limiti', core: 'Çekirdek', voltage: 'Voltaj', final: 'Bitiriliyor' };
@@ -557,6 +560,15 @@ export async function rigView(el, [rigId]) {
     if (e.target.closest('[data-screen]')) return screenDialog();
     const tb = e.target.closest('[data-tune],[data-tune-cancel],[data-tune-dismiss],[data-tune-apply],[data-tune-apply-cards]');
     if (tb && !tb.disabled) return tuneAction(tb).catch((err) => toast(err.message, 'bad'));
+    if (e.target.closest('[data-clear-lost]')) {
+      return (async () => {
+        const n = data.gpus.filter((g) => !g.present).length;
+        if (!(await confirmDialog('Kayıp kartlar silinsin mi?', `${n} kart listeden ve geçmişten silinecek. Kart tekrar takılırsa yeni kart olarak görünür.`, 'Sil'))) return;
+        await api(`rigs/${rigId}/lost-gpus`, { method: 'DELETE' });
+        toast('Kayıp kartlar silindi.');
+        await load();
+      })().catch((err) => toast(err.message, 'bad'));
+    }
     const row = e.target.closest('[data-gpu]');
     if (row) gpuDialog(Number(row.dataset.gpu)).catch((err) => toast(err.message, 'bad'));
   });
