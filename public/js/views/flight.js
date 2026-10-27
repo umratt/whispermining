@@ -17,7 +17,9 @@ const POOLS = {
   PRL: [['Kryptex', 'prl.kryptex.network:7048'], ['Kryptex Avrupa', 'prl-eu.kryptex.network:7048']],
   // Quantus da kendi protokolünü kullanır: portun açık olduğu doğrulandı
   QUANTUS: [['Kryptex', 'qtc.kryptex.network:7049'], ['Kryptex Avrupa', 'qtc-eu.kryptex.network:7049']],
+  EVR: [['Evrpool Avrupa', 'eu.evrpool.com:1111'], ['Evrpool ABD', 'us.evrpool.com:1111']],
 };
+POOLS.EVRMORE = POOLS.EVR;
 POOLS.PEARL = POOLS.PRL; // cüzdan "Pearl" diye eklenmiş olabilir
 // Her kartta çalışmayan algoritmalar için formda uyarı
 const ALGO_NOTES = {
@@ -30,7 +32,8 @@ const poolUrl = (hp) => `stratum+tcp://${hp}`;
 const KNOWN_POOLS = new Set(Object.values(POOLS).flat().map(([, hp]) => poolUrl(hp)));
 // [coin, algoritma, önerilen havuz]
 const COINS = [['ETC', 'etchash'], ['RVN', 'kawpow'], ['ERG', 'autolykos2'], ['CFX', 'octopus'], ['FIRO', 'firopow'],
-  ['KAS', 'kaspa'], ['ALPH', 'alephium'], ['BEAM', 'beamhash'], ['PRL', 'pearl'], ['PEARL', 'pearl'], ['QUANTUS', 'quantus']].map(([c, a]) => [c, a, POOLS[c] ? poolUrl(POOLS[c][0][1]) : undefined]);
+  ['KAS', 'kaspa'], ['ALPH', 'alephium'], ['BEAM', 'beamhash'], ['PRL', 'pearl'], ['PEARL', 'pearl'], ['QUANTUS', 'quantus'],
+  ['EVR', 'evrprogpow'], ['EVRMORE', 'evrprogpow']].map(([c, a]) => [c, a, POOLS[c] ? poolUrl(POOLS[c][0][1]) : undefined]);
 const coinInfo = (c) => COINS.find(([k]) => k === String(c || '').trim().toUpperCase());
 const poolOptions = (coin) => {
   const list = POOLS[String(coin || '').trim().toUpperCase()] || [];

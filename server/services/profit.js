@@ -15,7 +15,7 @@ const ALGO_KEY = {
   Octopus: 'ops', Zhash: 'zh',
 };
 // WhatToMine algoritması → bizim miner kataloğundaki algoritma adı (panelden kazılabilir mi?)
-const OUR_ALGO = { Pearl: 'pearl', QPoW: 'quantus', KawPow: 'kawpow', Etchash: 'etchash', Autolykos: 'autolykos2', Octopus: 'octopus',
+const OUR_ALGO = { Pearl: 'pearl', QPoW: 'quantus', EvrProgPow: 'evrprogpow', KawPow: 'kawpow', Etchash: 'etchash', Autolykos: 'autolykos2', Octopus: 'octopus',
   FiroPow: 'firopow', BeamHashIII: 'beamhash' };
 
 // Kart adı → WhatToMine kart anahtarı. P106-100, GTX 1060 6GB ile aynı çiptir (GP106).

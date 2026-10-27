@@ -283,7 +283,8 @@ class SRBMiner(Spec):
     name, api_type, binary, port = "SRBMiner-Multi", "srbminer", "SRBMiner-MULTI", 21550
     vendors = ("nvidia", "amd")
     algos = {"etchash": "etchash", "kawpow": "kawpow", "autolykos2": "autolykos2", "firopow": "firopow",
-             "alephium": "blake3_alephium", "kaspa": "kheavyhash", "pearl": "pearlhash", "quantus": "quantus"}
+             "alephium": "blake3_alephium", "kaspa": "kheavyhash", "pearl": "pearlhash", "quantus": "quantus",
+             "evrprogpow": "evrprogpow"}
 
     def args(self, fs, miner, gpus):
         pools = []

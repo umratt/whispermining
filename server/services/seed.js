@@ -29,7 +29,7 @@ const CATALOG = [
   {
     name: 'SRBMiner-Multi', api_type: 'srbminer', nvidia: 1, amd: 1, notes: 'AMD + NVIDIA, çok algoritma. RX 580 için ikinci seçenek.',
     versions: [{ version: '3.8.0', url: 'https://github.com/doktor83/SRBMiner-Multi/releases/download/3.8.0/SRBMiner-Multi-3-8-0-Linux.tar.gz',
-      sha256: '095c3f75905ee023e8ed85ac905afefc92825cce83a528fa955cf1db456d3dd8', algos: 'etchash,kawpow,autolykos2,firopow,alephium,kaspa,pearl,quantus', default: true }],
+      sha256: '095c3f75905ee023e8ed85ac905afefc92825cce83a528fa955cf1db456d3dd8', algos: 'etchash,kawpow,autolykos2,firopow,alephium,kaspa,pearl,quantus,evrprogpow', default: true }],
   },
   {
     name: 'GMiner', api_type: 'gminer', nvidia: 1, amd: 1, notes: 'Ağırlıklı NVIDIA. P106 için etchash/kawpow.',

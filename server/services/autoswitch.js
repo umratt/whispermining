@@ -19,11 +19,12 @@ const DEFAULT_POOL = {
   KAS: 'stratum+tcp://kas.2miners.com:2020', ALPH: 'stratum+tcp://alephium.herominers.com:1199',
   CFX: 'stratum+tcp://conflux.herominers.com:1170', FIRO: 'stratum+tcp://pool.woolypooly.com:3104',
   PRL: 'stratum+tcp://prl.kryptex.network:7048', QUANTUS: 'stratum+tcp://qtc.kryptex.network:7049',
+  EVR: 'stratum+tcp://eu.evrpool.com:1111',
 };
 // Coin → bizim algoritma adı (flight sheet'i kendiliğinden kurmak için; ağ bağlantısı gerekmez)
 const COIN_ALGO = { ETC: 'etchash', RVN: 'kawpow', ERG: 'autolykos2', KAS: 'kaspa', ALPH: 'alephium', CFX: 'octopus',
-  FIRO: 'firopow', PRL: 'pearl', QUANTUS: 'quantus' };
-const ALIAS = { PEARL: 'PRL', QUAN: 'QUANTUS' };
+  FIRO: 'firopow', PRL: 'pearl', QUANTUS: 'quantus', EVR: 'evrprogpow' };
+const ALIAS = { PEARL: 'PRL', QUAN: 'QUANTUS', EVRMORE: 'EVR' };
 const tagOf = (coin) => ALIAS[String(coin || '').toUpperCase()] || String(coin || '').toUpperCase();
 
 function state(userId) {
