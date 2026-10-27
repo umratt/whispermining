@@ -188,6 +188,28 @@ class RemoteConsoleTest(unittest.TestCase):
         self.assertEqual(run.call_args[0][0], ["lspci"])
         self.assertEqual((st, out), ("done", "01:00.0 VGA compatible controller: NVIDIA"))
 
+
+class PearlTest(unittest.TestCase):
+    """Pearl (pearlhash) sadece tensor çekirdekli kartlarda: karışık rig'de P106 / RX 580 miner'a verilmez."""
+
+    def test_card_support(self):
+        from whisperagent.agent import algo_supported
+        ok = lambda m, v="nvidia": algo_supported("pearl", {"model": m, "vendor": v})
+        self.assertTrue(ok("NVIDIA GeForce RTX 3080"))
+        self.assertTrue(ok("NVIDIA GeForce RTX 2060"))
+        self.assertFalse(ok("NVIDIA P106-100"))
+        self.assertFalse(ok("NVIDIA GeForce GTX 1070"))
+        self.assertFalse(ok("AMD Radeon RX 580 8GB", "amd"))
+        self.assertTrue(ok("AMD Radeon RX 6700 XT", "amd"))
+        self.assertTrue(algo_supported("etchash", {"model": "NVIDIA P106-100", "vendor": "nvidia"}))
+
+    def test_miner_algo_names(self):
+        fs = dict(FS, algo="pearl")
+        a = SPECS["bzminer"].args(fs, {}, NV)
+        self.assertEqual(a[a.index("-a") + 1], "pearl")
+        a = SPECS["srbminer"].args(fs, {}, NV)
+        self.assertEqual(a[a.index("--algorithm") + 1], "pearlhash")
+
 if __name__ == "__main__":
     unittest.main()
 

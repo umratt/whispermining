@@ -29,7 +29,7 @@ const CATALOG = [
   {
     name: 'SRBMiner-Multi', api_type: 'srbminer', nvidia: 1, amd: 1, notes: 'AMD + NVIDIA, çok algoritma. RX 580 için ikinci seçenek.',
     versions: [{ version: '3.8.0', url: 'https://github.com/doktor83/SRBMiner-Multi/releases/download/3.8.0/SRBMiner-Multi-3-8-0-Linux.tar.gz',
-      sha256: '095c3f75905ee023e8ed85ac905afefc92825cce83a528fa955cf1db456d3dd8', algos: 'etchash,kawpow,autolykos2,firopow,alephium,kaspa', default: true }],
+      sha256: '095c3f75905ee023e8ed85ac905afefc92825cce83a528fa955cf1db456d3dd8', algos: 'etchash,kawpow,autolykos2,firopow,alephium,kaspa,pearl', default: true }],
   },
   {
     name: 'GMiner', api_type: 'gminer', nvidia: 1, amd: 1, notes: 'Ağırlıklı NVIDIA. P106 için etchash/kawpow.',
@@ -44,7 +44,7 @@ const CATALOG = [
   {
     name: 'BzMiner', api_type: 'bzminer', nvidia: 1, amd: 1, notes: 'AMD + NVIDIA. İstatistik okuma gerçek rig\'de doğrulanacak.',
     versions: [{ version: '100.51', url: 'https://github.com/bzminer/bzminer/releases/download/v100.51/bzminer_v100.51_linux.tar.gz',
-      sha256: 'dc2001f4bdcee6892b5a9cb8c96a44ddc12d17755fed360eca8917d0d2535ce5', algos: 'etchash,kawpow,autolykos2,alephium,octopus', default: true }],
+      sha256: 'dc2001f4bdcee6892b5a9cb8c96a44ddc12d17755fed360eca8917d0d2535ce5', algos: 'etchash,kawpow,autolykos2,alephium,octopus,pearl', default: true }],
   },
 ];
 
@@ -58,7 +58,13 @@ function seedCatalog() {
         miner = { id: Number(r.lastInsertRowid) };
       }
       for (const v of m.versions) {
-        const existing = get('SELECT id, sha256, download_url FROM miner_versions WHERE miner_id = ? AND version = ?', miner.id, v.version);
+        const existing = get('SELECT id, sha256, download_url, algos FROM miner_versions WHERE miner_id = ? AND version = ?', miner.id, v.version);
+        // Aynı resmî dosyaya sonradan algoritma eklendiyse (ör. Pearl) listeyi genişlet; kullanıcının eklediklerini silme
+        if (existing && existing.download_url === v.url) {
+          const have = new Set(String(existing.algos || '').split(',').filter(Boolean));
+          const add = v.algos.split(',').filter((a) => !have.has(a));
+          if (add.length) run('UPDATE miner_versions SET algos = ? WHERE id = ?', [...have, ...add].join(','), existing.id);
+        }
         if (!existing) {
           if (v.default) run('UPDATE miner_versions SET is_default = 0 WHERE miner_id = ?', miner.id);
           run(`INSERT INTO miner_versions (miner_id, version, download_url, sha256, algos, is_default, created_at)

@@ -13,12 +13,20 @@ const POOLS = {
   ALPH: [['HeroMiners', 'alephium.herominers.com:1199'], ['Kryptex', 'alph.kryptex.network:7777'], ['WoolyPooly', 'pool.woolypooly.com:3106']],
   CFX: [['HeroMiners', 'conflux.herominers.com:1170'], ['F2Pool', 'cfx.f2pool.com:6800'], ['WoolyPooly', 'pool.woolypooly.com:3094']],
   FIRO: [['WoolyPooly', 'pool.woolypooly.com:3104']],
+  // Pearl kendi stratum protokolünü kullanır: portun açık olduğu doğrulandı (standart el sıkışmaya yanıt vermez)
+  PRL: [['Kryptex', 'prl.kryptex.network:7048'], ['Kryptex Avrupa', 'prl-eu.kryptex.network:7048']],
+};
+POOLS.PEARL = POOLS.PRL; // cüzdan "Pearl" diye eklenmiş olabilir
+// Her kartta çalışmayan algoritmalar için formda uyarı
+const ALGO_NOTES = {
+  pearl: 'Pearl sadece NVIDIA RTX 20 ve üstü (ve AMD RX 6600–6950) kartlarda çalışır. P106-100, GTX 10xx ve RX 580 bu coin\'i kazamaz; '
+    + 'karışık rig\'de o kartlar boşta kalır. Miner: BzMiner ya da SRBMiner-Multi.',
 };
 const poolUrl = (hp) => `stratum+tcp://${hp}`;
 const KNOWN_POOLS = new Set(Object.values(POOLS).flat().map(([, hp]) => poolUrl(hp)));
 // [coin, algoritma, önerilen havuz]
 const COINS = [['ETC', 'etchash'], ['RVN', 'kawpow'], ['ERG', 'autolykos2'], ['CFX', 'octopus'], ['FIRO', 'firopow'],
-  ['KAS', 'kaspa'], ['ALPH', 'alephium'], ['BEAM', 'beamhash']].map(([c, a]) => [c, a, POOLS[c] ? poolUrl(POOLS[c][0][1]) : undefined]);
+  ['KAS', 'kaspa'], ['ALPH', 'alephium'], ['BEAM', 'beamhash'], ['PRL', 'pearl'], ['PEARL', 'pearl']].map(([c, a]) => [c, a, POOLS[c] ? poolUrl(POOLS[c][0][1]) : undefined]);
 const coinInfo = (c) => COINS.find(([k]) => k === String(c || '').trim().toUpperCase());
 const poolOptions = (coin) => {
   const list = POOLS[String(coin || '').trim().toUpperCase()] || [];
@@ -153,6 +161,7 @@ export async function flightView(el) {
           <div data-miners style="display:flex;flex-direction:column;gap:10px">${(f?.miners?.length ? f.miners : [{}]).map((m) => minerRow(versions, m))}</div>
           <button type="button" class="btn sm" style="margin-top:10px" data-row-add>${icon('plus')}İkinci miner ekle</button>
           <div class="hint" style="margin-top:6px">Karışık rig'de (AMD + NVIDIA) ya ikisini de destekleyen tek miner ya da kart türüne göre iki miner seçin. Seçilen algoritmayı desteklemeyen miner'lar listede pasif görünür.</div>
+          <div class="callout warn hidden" data-algo-note style="margin-top:8px"></div>
         </div>`,
       onOpen: (dlg) => {
         const box = dlg.querySelector('[data-miners]');
@@ -177,6 +186,9 @@ export async function flightView(el) {
             });
             if (sel.selectedOptions[0]?.disabled && firstOk) sel.value = firstOk.value;
           });
+          const note = dlg.querySelector('[data-algo-note]');
+          note.textContent = ALGO_NOTES[algo] || '';
+          note.classList.toggle('hidden', !ALGO_NOTES[algo]);
         };
         const setCoin = (coin) => {
           const info = coinInfo(coin);

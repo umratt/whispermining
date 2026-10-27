@@ -16,6 +16,19 @@ from .util import log
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\r")
 
+# Bazı algoritmalar her kartta çalışmaz. Pearl (pearlhash) tensor çekirdeği ister: NVIDIA RTX 20 ve sonrası,
+# AMD'de sadece RDNA2 (RX 6600–6950). P106/GTX 10xx ve RX 4xx/5xx bu algoritmayı kazamaz.
+ALGO_CARDS = {
+    "pearl": lambda g: (g["vendor"] == "nvidia" and not re.search(r"P10[0246]|GTX (9|10)\d\d|TITAN X|Quadro P", g["model"], re.I))
+    or (g["vendor"] == "amd" and bool(re.search(r"RX 6[6-9]\d\d", g["model"]))),
+}
+ALGO_NAMES = {"pearl": "Pearl (RTX 20 ve üstü NVIDIA ya da RX 6600–6950 gerekir)"}
+
+
+def algo_supported(algo, gpu):
+    check = ALGO_CARDS.get(algo)
+    return check(gpu) if check else True
+
 
 def tail_lines(path, n):
     """Dosyanın son n satırı, renk kodları temizlenmiş (panelde düz yazı gösterilir)."""
@@ -128,25 +141,39 @@ class Agent:
             self.miner_state = "stopped"
             return
         built = []
+        skipped = []
         for m in fs.get("miners", []):
             spec = SPECS.get(m.get("api_type"))
             if not spec:
                 self.error = f"Desteklenmeyen miner: {m.get('name')}"
                 continue
             vendors = [v for v in spec.vendors if m.get("gpu_vendor") in ("all", v)]
-            gpus = [g for g in self.gpus if g["vendor"] in vendors]
+            gpus = [g for g in self.gpus if g["vendor"] in vendors and algo_supported(fs["algo"], g)]
+            skipped += [g for g in self.gpus if g["vendor"] in vendors and not algo_supported(fs["algo"], g)]
             if not gpus:
-                continue  # bu rig'de bu miner'ın kartı yok
+                continue  # bu rig'de bu miner'ın (ya da bu algoritmanın) kartı yok
             self.miner_state = "downloading"
             self.send_stats_safe()
             binary = download_miner(spec, m, MINER_CACHE)
             env = None
+            if any(s["vendor"] == "nvidia" for s in skipped) and any(g["vendor"] == "nvidia" for g in gpus):
+                # Desteklemeyen NVIDIA kartları miner'dan gizle (CUDA sırası PCI sırasıyla aynı olsun)
+                env = dict(os.environ, CUDA_DEVICE_ORDER="PCI_BUS_ID",
+                           CUDA_VISIBLE_DEVICES=",".join(str(g["index"]) for g in gpus if g["vendor"] == "nvidia"))
             if self.fake:
-                env = dict(os.environ, WM_FAKE_BUSES=",".join(g["bus_id"] for g in gpus), WM_FAKE_ALGO=fs["algo"])
+                env = dict(env or os.environ, WM_FAKE_BUSES=",".join(g["bus_id"] for g in gpus), WM_FAKE_ALGO=fs["algo"])
             log_path = os.path.join(config.RUN_DIR, f"miner-{spec.api_type}.log")
             built.append((spec, MinerProcess(spec, binary, spec.args(fs, m, gpus), log_path, env), gpus))
         self.miners = built
         self.error = None
+        if skipped:
+            names = ", ".join(sorted({g["model"] for g in skipped}))
+            note = f"{ALGO_NAMES.get(fs['algo'], fs['algo'])}: bu kartlar kazamaz, boşta kalır: {names}"
+            log.warning(note)
+            if not built:
+                self.miner_state = "error"
+                self.error = note
+                return
         if os.path.exists(STOP_FLAG):
             self.miner_state = "stopped"
         else:

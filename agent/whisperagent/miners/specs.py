@@ -283,7 +283,7 @@ class SRBMiner(Spec):
     name, api_type, binary, port = "SRBMiner-Multi", "srbminer", "SRBMiner-MULTI", 21550
     vendors = ("nvidia", "amd")
     algos = {"etchash": "etchash", "kawpow": "kawpow", "autolykos2": "autolykos2", "firopow": "firopow",
-             "alephium": "blake3_alephium", "kaspa": "kheavyhash"}
+             "alephium": "blake3_alephium", "kaspa": "kheavyhash", "pearl": "pearlhash"}
 
     def args(self, fs, miner, gpus):
         pools = []
@@ -332,7 +332,7 @@ class Rigel(Spec):
 class BzMiner(Spec):
     name, api_type, binary, port = "BzMiner", "bzminer", "bzminer", 4014
     vendors = ("nvidia", "amd")
-    algos = {"etchash": "etchash", "kawpow": "kawpow", "autolykos2": "ergo", "alephium": "alph", "octopus": "olhash"}
+    algos = {"etchash": "etchash", "kawpow": "kawpow", "autolykos2": "ergo", "alephium": "alph", "octopus": "olhash", "pearl": "pearl"}
 
     def args(self, fs, miner, gpus):
         a = ["-a", self.algo(fs["algo"])]
