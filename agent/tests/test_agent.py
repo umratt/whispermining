@@ -94,6 +94,28 @@ class AmdOdTest(unittest.TestCase):
             self.assertIn("core 1150MHz", msg)
 
 
+
+class ClockJumpTest(unittest.TestCase):
+    """Açılışta sistem saati 3 saat geri düzeltilince agent susmamalı (Dükkan rig'inde yaşandı)."""
+
+    def test_wait_poll_ignores_wall_clock_jump(self):
+        from unittest import mock
+        from whisperagent import agent as agent_mod
+        clock = {"wall": 2_000_000_000.0, "mono": 100.0, "sleeps": 0}
+
+        def sleep(sec):
+            clock["sleeps"] += 1
+            clock["mono"] += sec
+            clock["wall"] += sec - 3 * 3600  # her saniye saat 3 saat geri atlıyormuş gibi
+
+        fake = mock.Mock(time=lambda: clock["wall"], monotonic=lambda: clock["mono"], sleep=sleep)
+        a = object.__new__(agent_mod.Agent)
+        a.poll = 10
+        a.watchdog = lambda: None
+        with mock.patch.object(agent_mod, "time", fake):
+            a.wait_poll()
+        self.assertEqual(clock["sleeps"], 10)
+
 if __name__ == "__main__":
     unittest.main()
 

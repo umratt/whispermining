@@ -186,7 +186,7 @@ class Tuner:
         self.failed = None
         self.cancelled = False
         self.global_fallback = False
-        self._begin_step(t or time.time())
+        self._begin_step(t or time.monotonic())
 
     def _clamp(self, p):
         out = {}
@@ -223,7 +223,7 @@ class Tuner:
             return
         if self.restarts_at_start is None:
             self.restarts_at_start = restarts
-        if (t or time.time()) - self.step_started < self.settle:
+        if (t or time.monotonic()) - self.step_started < self.settle:
             return
         by = {r["bus_id"]: r for r in rows}
         if any(b not in by for b in self.cards):
@@ -345,7 +345,7 @@ class Tuner:
 
     def status(self):
         remaining = max((len(c.phases) - c.phase_i for c in self.cards.values()), default=0)
-        eta = max(0, int((remaining * 3 + len(self.isolate_queue)) * self.step_sec - (time.time() - self.step_started)))
+        eta = max(0, int((remaining * 3 + len(self.isolate_queue)) * self.step_sec - (time.monotonic() - self.step_started)))
         before, best = self._totals("baseline"), self._totals("best")
         return {
             "status": "running" if not self.finished else ("failed" if self.failed else "done"),

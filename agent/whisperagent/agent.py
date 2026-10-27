@@ -37,7 +37,7 @@ class Agent:
         self.error = None
         self.download_retry_at = 0
         self.last_hw_scan = 0
-        self.next_update_check = time.time() + 120
+        self.next_update_check = time.monotonic() + 120
         self.view = {"server": self.server}
         self.tuner = None          # çalışan otomatik OC (varsa)
         self.last_rows = []
@@ -87,7 +87,7 @@ class Agent:
         gpus = self.hw.scan()
         changed = [g["bus_id"] + g["model"] for g in gpus] != [g["bus_id"] + g["model"] for g in self.gpus]
         self.gpus = gpus
-        self.last_hw_scan = time.time()
+        self.last_hw_scan = time.monotonic()
         if changed or force:
             log.info("Kartlar: %s", ", ".join(f"{g['bus_id']} {g['model']}" for g in gpus) or "yok")
             self.api.hardware(self.hardware_payload())
@@ -191,7 +191,7 @@ class Agent:
             except (MinerError, OSError, ValueError) as e:
                 self.miner_state = "error"
                 self.error = str(e)
-                self.download_retry_at = time.time() + 300
+                self.download_retry_at = time.monotonic() + 300
                 log.error("Miner hazırlanamadı: %s", e)
 
     # ---------- komutlar ----------
@@ -291,7 +291,7 @@ class Agent:
                 "gpus": rows}
 
     def step_tuner(self):
-        act = self.tuner.advance(time.time())
+        act = self.tuner.advance(time.monotonic())
         if act == "apply":
             log.info("Otomatik OC adım %d (%s): %s", self.tuner.steps, self.tuner.mode,
                      "; ".join(f"{b}={p}" for b, p in self.tuner.wanted_params_by_bus().items()))
@@ -337,9 +337,9 @@ class Agent:
             self.rescan(force=True)
             log.info("Panele bağlandı: %s", st.get("rig_name"))
 
-        if time.time() - self.last_hw_scan > 60:
+        if time.monotonic() - self.last_hw_scan > 60:
             self.rescan()
-        if self.error and self.miner_state == "error" and time.time() > self.download_retry_at and not self.miners:
+        if self.error and self.miner_state == "error" and time.monotonic() > self.download_retry_at and not self.miners:
             self.fs_signature = None  # indirme hatası: 5 dakikada bir tekrar dene
 
         payload = self.collect()
@@ -360,8 +360,8 @@ class Agent:
             self.run_commands()
         self.poll = int(res.get("poll_interval_sec") or self.poll)
 
-        if time.time() > self.next_update_check:
-            self.next_update_check = time.time() + 6 * 3600
+        if time.monotonic() > self.next_update_check:
+            self.next_update_check = time.monotonic() + 6 * 3600
             self.check_update()
 
         self.view["miner"] = {"running": "çalışıyor", "starting": "başlıyor", "downloading": "indiriliyor",
@@ -369,9 +369,13 @@ class Agent:
         self.view["error"] = self.error
         display.show(self.view)
 
-        # Bekleme sırasında miner'ları izle
-        until = time.time() + self.poll
-        while time.time() < until:
+        self.wait_poll()
+
+    def wait_poll(self):
+        """Bekleme sırasında miner'ları izle. Monotonik saat: açılışta saat internetten düzeltilince
+        (BIOS saati yerel saatteyse 3 saat geri atlar) bekleme uzamaz."""
+        until = time.monotonic() + self.poll
+        while time.monotonic() < until:
             self.watchdog()
             time.sleep(1)
 

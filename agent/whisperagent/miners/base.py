@@ -127,7 +127,7 @@ class MinerProcess:
         self.proc = subprocess.Popen(self._cmd(), stdout=logf, stderr=subprocess.STDOUT, cwd=os.path.dirname(self.binary),
                                      env=self.env, start_new_session=(os.name != "nt"))
         logf.close()
-        self.started_at = time.time()
+        self.started_at = time.monotonic()
 
     def running(self):
         return self.proc is not None and self.proc.poll() is None
@@ -148,7 +148,7 @@ class MinerProcess:
     def watchdog(self):
         """Çöktüyse yeniden başlat (5 sn, 10, 20 … en fazla 120 sn bekleyerek). Durum metni döner."""
         if self.running():
-            if self.started_at and time.time() - self.started_at > 600:
+            if self.started_at and time.monotonic() - self.started_at > 600:
                 self.restarts = 0  # 10 dk sorunsuz çalıştı
             return "running"
         if self.proc is not None:
@@ -156,15 +156,15 @@ class MinerProcess:
             log.warning("%s kapandı (kod %s)", self.spec.name, self.last_exit)
             self.proc = None
             self.started_at = None
-            self.next_restart = time.time() + min(120, 5 * (2 ** self.restarts))
+            self.next_restart = time.monotonic() + min(120, 5 * (2 ** self.restarts))
             self.restarts += 1
-        if time.time() >= self.next_restart:
+        if time.monotonic() >= self.next_restart:
             self.start()
             return "starting"
         return "error"
 
     def uptime(self):
-        return int(time.time() - self.started_at) if self.started_at else 0
+        return int(time.monotonic() - self.started_at) if self.started_at else 0
 
     def tail(self, n=20):
         try:

@@ -5,4 +5,4 @@ istatistik gönderir, flight sheet'teki miner'ı indirip çalıştırır, OC uyg
 Sadece Python standart kütüphanesini kullanır (Ubuntu 22.04: Python 3.10).
 """
 
-VERSION = "1.0.2"
+VERSION = "1.0.3"
