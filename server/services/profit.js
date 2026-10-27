@@ -31,6 +31,12 @@ const CARD_KEYS = [
   [/RX 5700/i, '5700'], [/RX 5600/i, '5600xt'], [/RX 7900 XTX/i, '79xtx'], [/RX 7900/i, '79xt'], [/RX 7800/i, '78xt'],
   [/Vega 64/i, 'vega64'], [/Vega 56/i, 'vega56'], [/Radeon VII/i, 'vii'],
 ];
+// Bazı algoritmalar her kartta çalışmaz (agent'taki ALGO_CARDS ile aynı kural): kazanamayan kart hesaba katılmaz
+const ALGO_CARDS = {
+  pearl: (l) => (/^(RTX|GTX)/.test(l) && !/P10[0246]|GTX (9|10)\d\d/.test(l)) || /RX 6[6-9]\d\d/.test(l),
+  quantus: (l) => /RTX [3-9]\d{3}|RX [679]\d{3}/.test(l),
+};
+const canMine = (ourAlgo, key) => !ALGO_CARDS[ourAlgo] || ALGO_CARDS[ourAlgo](cardLabel(key));
 const cardKey = (model) => (CARD_KEYS.find(([re]) => re.test(model)) || [])[1] || null;
 
 let cache = null;
@@ -99,7 +105,7 @@ async function ranking(models) {
     for (const c of d.list) {
       const hr = c.key ? f[`${c.key}_hr`] : 0;
       const base = c.key ? d.defaults[c.key] : 0;
-      if (!hr || !base || !c.btc_default) continue; // bu kart bu algoritmayı kazamıyor ya da veri yok
+      if (!hr || !base || !c.btc_default || !canMine(c.our_algo, key)) continue; // bu kart bu algoritmayı kazamıyor ya da veri yok
       const ratio = hr / base;
       rows.push({ name: c.name, tag: c.tag, algo: c.algo, our_algo: c.our_algo, hashrate: hr, power: f[`${c.key}_p`] || null,
         coins: c.coins_default * ratio, usd: usd(c.btc_default * ratio) });
@@ -136,14 +142,16 @@ async function calc(selection) {
   const rows = [];
   for (const c of d.list) {
     if (!c.key || !d.defaults[c.key] || !c.btc_default) continue;
-    let hr = 0; let power = 0;
+    let hr = 0; let power = 0; let cards = 0;
     for (const s of sel) {
       const f = d.factors[s.key];
-      if (f[`${c.key}_hr`]) { hr += f[`${c.key}_hr`] * s.count; power += (f[`${c.key}_p`] || 0) * s.count; }
+      if (f[`${c.key}_hr`] && canMine(c.our_algo, s.key)) {
+        hr += f[`${c.key}_hr`] * s.count; power += (f[`${c.key}_p`] || 0) * s.count; cards += s.count;
+      }
     }
     if (!hr) continue;
     const ratio = hr / d.defaults[c.key];
-    rows.push({ name: c.name, tag: c.tag, algo: c.algo, our_algo: c.our_algo, hashrate: hr, unit: UNITS[c.key] || '', power,
+    rows.push({ name: c.name, tag: c.tag, algo: c.algo, our_algo: c.our_algo, hashrate: hr, unit: UNITS[c.key] || '', power, cards,
       coins: c.coins_default * ratio, usd: c.btc_default * ratio * d.btc_usd, usd24: (c.btc_default24 || c.btc_default) * ratio * d.btc_usd,
       price_usd: c.btc_rate * d.btc_usd, price_change: c.btc_rate24 ? c.btc_rate / c.btc_rate24 - 1 : null,
       volume_usd: c.volume_btc * d.btc_usd, market_cap: c.market_cap, block_time: c.block_time, block_reward: c.block_reward,

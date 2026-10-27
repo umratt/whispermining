@@ -13,7 +13,7 @@ const COLS = [
 ];
 
 export async function profitView(el) {
-  const prefs = { cur: 'TRY', mineable: false, sort: 'net', dir: -1, q: '', sel: null, ...loadPrefs() };
+  const prefs = { cur: 'TRY', showAll: false, sort: 'net', dir: -1, q: '', sel: null, ...loadPrefs() };
   let base = null;   // /profit: rig'lerdeki kartlar, elektrik fiyatı
   let calc = null;   // /profit/calc: seçilen kart setine göre coin'ler
   let auto = null;   // otomatik coin değiştirme
@@ -103,7 +103,7 @@ export async function profitView(el) {
     const elec = (w) => (w ? (w * 24 / 1000) * kwh / calc.usd_try : 0);
     const q = prefs.q.trim().toLowerCase();
     const rows = calc.rows
-      .filter((r) => (!prefs.mineable || r.our_algo) && (!q || `${r.name} ${r.tag} ${r.algo}`.toLowerCase().includes(q)))
+      .filter((r) => (prefs.showAll || r.our_algo) && (!q || `${r.name} ${r.tag} ${r.algo}`.toLowerCase().includes(q)))
       .map((r) => {
         const e = elec(r.power);
         const mcap = Number(String(r.market_cap || '').replace(/[^0-9.]/g, '')) || 0;
@@ -160,7 +160,7 @@ export async function profitView(el) {
       <div class="card">
         <div class="card-pad" style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;padding-bottom:0">
           <input class="input" data-q placeholder="Coin ya da algoritma ara…" value="${prefs.q}" style="max-width:260px">
-          <label class="check"><input type="checkbox" data-mineable ${prefs.mineable ? 'checked' : ''}> Sadece panelden kazılabilenler</label>
+          <label class="check"><input type="checkbox" data-show-all ${prefs.showAll ? 'checked' : ''}> Panelden kazılamayan coin'leri de göster</label>
           <span class="small dim grow" style="text-align:right">${rows.length} coin · başlığa tıklayarak sıralayın</span>
         </div>
         ${rows.length ? html`<div class="table-wrap"><table class="num">
@@ -168,7 +168,7 @@ export async function profitView(el) {
           <tbody>${rows.map((r, i) => html`<tr${r === top ? ' style="background:var(--accent-soft)"' : ''}>
             <td class="dim">${i + 1}</td>
             <td><strong>${r.name}</strong> <span class="dim small">${r.tag}</span><div class="small dim">${r.algo}</div></td>
-            <td class="r hide-sm">${num(r.hashrate, 1)} <span class="dim small">${r.unit}</span><div class="small dim">${r.power ? `${Math.round(r.power)} W` : ''}</div></td>
+            <td class="r hide-sm">${num(r.hashrate, 1)} <span class="dim small">${r.unit}</span><div class="small dim">${r.power ? `${Math.round(r.power)} W` : ''}${r.cards < total ? html` · <span class="t-warn">${r.cards}/${total} kart</span>` : ''}</div></td>
             <td class="r hide-sm">${num(r.coins)}</td>
             <td class="r hide-sm">${price(r.price_usd)}${r.price_change !== null ? html`<div class="small ${r.price_change >= 0 ? 't-ok' : 't-bad'}">${r.price_change >= 0 ? '+' : ''}${(r.price_change * 100).toFixed(1)}%</div>` : ''}</td>
             <td class="r">${money(r.gross)}</td>
@@ -182,7 +182,7 @@ export async function profitView(el) {
         </table></div>` : html`<div class="empty">${total ? 'Bu kartlarla eşleşen coin yok.' : 'Hesap için kart seçin.'}</div>`}
       </div>
       <p class="small dim" style="margin:10px 2px">Tahmini değerlerdir; zorluk, coin fiyatı ve havuz ücreti değiştikçe gerçek kazanç değişir. Hashrate ve güç WhatToMine'ın stok kart
-        ölçümleridir (OC ile değişir). "24 sa ort.": son 24 saatin ortalama zorluk ve fiyatıyla gelir. "Kazılabilir": flight sheet'te seçilebilen ve katalogda miner'ı olan coin.</p>`);
+        ölçümleridir (OC ile değişir). "24 sa ort.": son 24 saatin ortalama zorluk ve fiyatıyla gelir. "Kazılabilir": flight sheet'te seçilebilen ve katalogda miner'ı olan coin. "3/11 kart": bu coin'i kartların sadece bir kısmı kazabilir, kalanlar hesaba katılmaz.</p>`);
   }
 
   // ---------- olaylar ----------
@@ -228,7 +228,7 @@ export async function profitView(el) {
       api('me/power-price', { method: 'PUT', body: { value: kwh } }).then(loadAuto).catch((err) => toast(err.message, 'bad'));
       return;
     }
-    if (t.matches('[data-mineable]')) { prefs.mineable = t.checked; savePrefs(prefs); render(); }
+    if (t.matches('[data-show-all]')) { prefs.showAll = t.checked; savePrefs(prefs); render(); }
   });
 
   el.innerHTML = String(html`<div class="page-head"><div class="grow"><h1>Kazanç sıralaması</h1><div class="sub">Veriler alınıyor…</div></div></div>`);
