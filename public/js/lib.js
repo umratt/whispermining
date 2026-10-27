@@ -98,7 +98,7 @@ export function confBox(res) {
     <div class="btn-row"><a class="btn primary" href="${res.conf_url}" download="rig.conf">${icon('download')}rig.conf indir</a>
       <button type="button" class="btn" data-conf-copy>${icon('copy')}İçeriği kopyala</button></div>
     <textarea class="mono small" readonly rows="7" spellcheck="false" data-conf-text>${res.conf}</textarea>
-    <span class="hint">İndirme olmazsa: içeriği kopyalayın, Not Defteri'ne yapıştırıp flash'taki WMINING sürücüsüne <strong>rig.conf</strong> adıyla kaydedin. Bağlantı 15 dk geçerlidir; içerik bu rig'in anahtarıdır, kimseyle paylaşmayın.</span>
+    <span class="hint">İndirme olmazsa: içeriği kopyalayın, Not Defteri'ne yapıştırıp flash'taki WMINING sürücüsüne <strong>rig.conf</strong> adıyla kaydedin. Dosyayı sonradan da rig ayarlarından tekrar indirebilirsiniz. İçerik bu rig'in anahtarıdır, kimseyle paylaşmayın.</span>
   </div>`;
 }
 

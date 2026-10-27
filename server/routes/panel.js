@@ -5,6 +5,7 @@ const { get, all, run, tx, now } = require('../db');
 const config = require('../config');
 const sec = require('../security');
 const rigsSvc = require('../services/rigs');
+const vault = require('../services/confvault');
 const { COMMAND_TYPES } = require('./agent');
 
 const router = express.Router();
@@ -119,27 +120,31 @@ router.get('/rigs', (req, res) => {
   res.json({ rigs: rows.map((r) => rigSummary(r, t)) });
 });
 
-// rig.conf indirme: dosya sunucudan "attachment" olarak verilir (tarayıcıda üretilen blob indirmesi her tarayıcıda
-// çalışmıyor). Anahtar diske yazılmaz; sadece bellekte, oluşturan kullanıcıya özel ve 15 dk geçerli tutulur.
-const CONF_TTL_SEC = 900;
-const pendingConf = new Map();
-function confDownload(userId, rig, secret) {
-  const t = now();
-  for (const [k, v] of pendingConf) if (v.expires < t) pendingConf.delete(k);
-  const token = sec.randomToken(24);
-  const text = rigsSvc.rigConfText(rig, secret, config.publicUrl);
-  pendingConf.set(token, { userId, rigId: rig.id, text, expires: t + CONF_TTL_SEC });
-  return { conf: text, conf_url: `api/rig-conf/${token}` };
+// rig.conf: anahtar şifreli saklanır, sahibi rig'i silene ya da anahtarı yenileyene kadar istediği zaman indirebilir.
+// Dosya sunucudan "attachment" olarak verilir (tarayıcıda üretilen blob indirmesi her tarayıcıda çalışmıyor).
+function confResponse(rig, secret) {
+  return { conf: rigsSvc.rigConfText(rig, secret, config.publicUrl), conf_url: `api/rigs/${rig.id}/rig.conf` };
 }
 
-router.get('/rig-conf/:token', (req, res) => {
-  const p = pendingConf.get(String(req.params.token));
-  if (!p || p.expires < now() || p.userId !== req.user.id) {
+router.get('/rigs/:id/rig.conf', (req, res) => {
+  const r = rigsSvc.ownedRig(req.user.id, req.params.id);
+  const secret = r && vault.open(r.secret_enc, r.id);
+  if (!secret) {
     return res.status(404).type('text/plain; charset=utf-8')
-      .send("Bu indirme bağlantısının süresi doldu. Rig ayarlarından \"rig.conf'u yeniden oluştur\" ile yenisini alın.");
+      .send(r ? "Bu rig için kayıtlı rig.conf yok (eşleştirme koduyla eklenmiş ya da eski kayıt). Rig ayarlarından \"rig.conf'u yeniden oluştur\" ile yenisini alın."
+        : 'Rig bulunamadı.');
   }
   res.set({ 'Content-Type': 'application/octet-stream', 'Content-Disposition': 'attachment; filename="rig.conf"', 'Cache-Control': 'no-store' });
-  res.send(p.text);
+  res.send(rigsSvc.rigConfText(r, secret, config.publicUrl));
+});
+
+// İçeriği göstermek için (kopyalama yedeği)
+router.get('/rigs/:id/rig-conf-text', (req, res) => {
+  const r = rigsSvc.ownedRig(req.user.id, req.params.id);
+  const secret = r && vault.open(r.secret_enc, r.id);
+  if (!secret) return bad(res, "Bu rig için kayıtlı rig.conf yok. \"rig.conf'u yeniden oluştur\" ile yenisini alın.", 404);
+  res.set('Cache-Control', 'no-store');
+  res.json(confResponse(r, secret));
 });
 
 // rig.conf ile ekleme: rig önceden oluşturulur ve hesaba bağlanır. Agent dosyadaki anahtarla doğrudan bağlanır.
@@ -150,18 +155,18 @@ router.post('/rigs', sec.rateLimit({ windowSec: 600, max: 30, key: (req) => `rig
   const rig = { id: crypto.randomUUID(), name };
   const secret = sec.randomToken(32);
   const t = now();
-  run(`INSERT INTO rigs (id, owner_id, name, secret_hash, paired_at, created_at) VALUES (?,?,?,?,?,?)`,
-    rig.id, req.user.id, name, sec.sha256(secret), t, t);
-  res.json({ ok: true, rig_id: rig.id, ...confDownload(req.user.id, rig, secret) });
+  run(`INSERT INTO rigs (id, owner_id, name, secret_hash, secret_enc, paired_at, created_at) VALUES (?,?,?,?,?,?,?)`,
+    rig.id, req.user.id, name, sec.sha256(secret), vault.seal(secret, rig.id), t, t);
+  res.json({ ok: true, rig_id: rig.id, ...confResponse(rig, secret) });
 });
 
-// Anahtarı yenile: eski rig.conf hemen geçersiz olur, yeni dosya bir kez verilir
+// Anahtarı yenile: eski rig.conf hemen geçersiz olur
 router.post('/rigs/:id/rotate-secret', (req, res) => {
   const r = rigsSvc.ownedRig(req.user.id, req.params.id);
   if (!r) return bad(res, 'Rig bulunamadı.', 404);
   const secret = sec.randomToken(32);
-  run('UPDATE rigs SET secret_hash = ?, hw_changed_at = NULL WHERE id = ?', sec.sha256(secret), r.id);
-  res.json({ ok: true, ...confDownload(req.user.id, r, secret) });
+  run('UPDATE rigs SET secret_hash = ?, secret_enc = ?, hw_changed_at = NULL WHERE id = ?', sec.sha256(secret), vault.seal(secret, r.id), r.id);
+  res.json({ ok: true, ...confResponse(r, secret) });
 });
 
 router.post('/rigs/pair',sec.rateLimit({ windowSec: 600, max: 20, key: (req) => `pair:${req.user.id}` }), (req, res) => {
@@ -203,7 +208,7 @@ router.get('/rigs/:id', (req, res) => {
     rig: { ...summary, hostname: r.hostname, os_info: r.os_info, cpu_model: r.cpu_model, ram_total_mb: r.ram_total_mb,
       ram_used_mb: r.ram_used_mb, cpu_load: r.cpu_load, miner_uptime_sec: r.miner_uptime_sec, paired_at: r.paired_at,
       flight_sheet_id: r.flight_sheet_id, config_version: r.config_version, hw_changed_at: r.hw_changed_at,
-      miner_error: summary.online ? r.miner_error : null, tune: rigsSvc.parseJson(r.tune_state, null) },
+      miner_error: summary.online ? r.miner_error : null, tune: rigsSvc.parseJson(r.tune_state, null), has_conf: !!r.secret_enc },
     gpus, models, commands, alerts,
   });
 });

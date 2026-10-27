@@ -264,6 +264,10 @@ const MIGRATIONS = [
   `
   ALTER TABLE gpus ADD COLUMN oc_params TEXT;
   `,
+  // v8: rig.conf anahtarı şifreli saklanır (sahibi istediği zaman tekrar indirebilsin)
+  `
+  ALTER TABLE rigs ADD COLUMN secret_enc TEXT;
+  `,
 ];
 
 function migrate() {

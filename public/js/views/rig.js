@@ -288,10 +288,20 @@ export async function rigView(el, [rigId]) {
           <span class="hint">Profil sadece seçilen modele uygulanır. Sonradan takılan farklı bir model stok ayarla başlar. Karta özel OC için kart satırına tıklayın.</span></div>
         <hr style="border:0;border-top:1px solid var(--border);margin:4px 0">
         <div class="btn-row">
+          ${r.has_conf ? html`<button type="button" class="btn sm" data-conf-show>${icon('download')}rig.conf indir</button>` : ''}
           <button type="button" class="btn sm" data-rotate>${icon('restart')}rig.conf'u yeniden oluştur</button>
           <button type="button" class="btn danger sm" data-delete>${icon('trash')}Rig'i hesaptan kaldır</button></div>
         <span class="hint">Yeniden oluşturunca eski rig.conf hemen geçersiz olur; yeni dosyayı flash'a kopyalayana kadar rig bağlanamaz.</span>`,
       onOpen: (dlg) => {
+        dlg.querySelector('[data-conf-show]')?.addEventListener('click', async () => {
+          const res = await api(`rigs/${rigId}/rig-conf-text`);
+          dlg.close();
+          openDialog({
+            title: 'rig.conf',
+            body: html`<p class="muted" style="margin:0">Dosyayı flash belleğin <strong>WMINING</strong> bölümüne kopyalayın.</p>${confBox(res)}`,
+            onOpen: (d) => { wireConfBox(d); downloadUrl(res.conf_url); },
+          });
+        });
         dlg.querySelector('[data-rotate]').addEventListener('click', async () => {
           dlg.close();
           if (!(await confirmDialog('rig.conf yeniden oluşturulsun mu?', `"${r.name}" için yeni anahtar üretilecek. Eski rig.conf ile bağlanan rig, yeni dosya flash'a kopyalanana kadar bağlanamaz.`, 'Yeniden oluştur'))) return;
