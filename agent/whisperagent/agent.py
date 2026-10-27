@@ -243,6 +243,53 @@ class Agent:
             return "done", 0, "; ".join(self.apply_oc()) or "OC listesi boş"
         return "failed", 1, f"Bilinmeyen komut: {ctype}"
 
+    # Panelin rig ekranından yazılabilen tanı komutları: sabit program + argüman, kabuk yok
+    DIAG = {
+        "nvidia-smi": ["nvidia-smi"],
+        "clinfo": ["clinfo", "-l"],
+        "uptime": ["uptime"],
+        "df": ["df", "-h", "/", "/wmining"],
+        "free": ["free", "-m"],
+        "ip": ["ip", "-br", "addr"],
+        "ping": ["ping", "-c", "3", "-W", "2", "1.1.1.1"],
+        "lspci": ["lspci"],
+        "dmesg": ["dmesg", "--ctime"],
+    }
+
+    def console_exec(self, cmd):
+        """Rig ekranından gelen komut → (durum, kod, çıktı)."""
+        basic = {"miner start": "miner_start", "miner stop": "miner_stop", "miner restart": "miner_restart", "oc": "apply_oc"}
+        if cmd in basic:
+            return self.exec_basic(basic[cmd])
+        if cmd == "miner log":
+            lines = []
+            for _s, proc, _g in self.miners:
+                lines += [f"── {proc.spec.name} ──"] + tail_lines(proc.log_path, 60)
+            return "done", 0, "\n".join(lines) or "Miner çalışmıyor"
+        if cmd == "log":
+            return "done", 0, "\n".join(tail_lines(os.path.join(config.RUN_DIR, "agent.log"), 60))
+        if cmd == "bilgi":
+            return "done", 0, (f"Rig: {self.view.get('rig_name')}\nRig ID: {self.api.rig_id}\nPanel: {self.server}\n"
+                               f"Agent: {VERSION}\nKartlar: {', '.join(g['model'] for g in self.gpus) or 'yok'}")
+        if cmd == "guncelle":
+            self.next_update_check = 0
+            return "done", 0, "Güncelleme kontrolü birkaç saniye içinde yapılacak"
+        argv = self.DIAG.get(cmd)
+        if not argv:
+            return "failed", 1, f"Bilinmeyen komut: {cmd}"
+        try:
+            r = subprocess.run(argv, capture_output=True, text=True, timeout=20, check=False)
+        except FileNotFoundError:
+            return "failed", 1, f"{argv[0]} bu sistemde yok"
+        except subprocess.TimeoutExpired:
+            return "failed", 1, f"{cmd} 20 sn içinde bitmedi"
+        out = ANSI.sub("", (r.stdout or "") + (r.stderr or ""))
+        if cmd == "lspci":
+            out = "\n".join(l for l in out.splitlines() if any(k in l for k in ("VGA", "3D", "Display"))) or out
+        if cmd == "dmesg":
+            out = "\n".join(out.splitlines()[-40:])
+        return ("done" if r.returncode == 0 else "failed"), r.returncode, out[-11000:] or "(çıktı yok)"
+
     def reboot_now(self):
         self.stop_miners()
         self.miner_state = "stopped"
@@ -293,6 +340,13 @@ class Agent:
             try:
                 if ctype in self.BASIC_COMMANDS:
                     status, code, out = self.exec_basic(ctype)
+                elif ctype == "console":
+                    cmd = str((c.get("payload") or {}).get("cmd") or "")
+                    if cmd == "sreboot":
+                        self.api.command_result(c["id"], "done", 0, "Yeniden başlatılıyor")
+                        self.reboot_now()
+                        continue
+                    status, code, out = self.console_exec(cmd)
                 elif ctype == "oc_tune":
                     if self.tuner and not self.tuner.finished:
                         status, code, out = "failed", 1, "Zaten bir otomatik OC çalışıyor"

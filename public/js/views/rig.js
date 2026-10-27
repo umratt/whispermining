@@ -437,6 +437,15 @@ export async function rigView(el, [rigId]) {
       body: html`
         <div class="small muted" data-screen-meta>Rig'den ekran isteniyor…</div>
         <pre data-screen-text style="${pre};min-height:180px">Bekleniyor… (rig birkaç saniye içinde göndermeye başlar)</pre>
+        <h3 style="margin:4px 0 0">Komut</h3>
+        <pre data-term style="${pre};max-height:260px;display:none"></pre>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <input class="input mono" data-term-input placeholder="Komut yazın, Enter'a basın (ör. miner restart, nvidia-smi) · liste: yardim"
+            autocomplete="off" spellcheck="false" style="flex:1;min-width:220px">
+          <button type="button" class="btn" data-term-send>Gönder</button>
+        </div>
+        <div class="btn-row" style="gap:6px">${['miner restart', 'miner stop', 'miner start', 'nvidia-smi', 'miner log', 'sreboot'].map((c) =>
+          html`<button type="button" class="btn sm" data-term-quick="${c}">${c}</button>`)}</div>
         <h3 style="margin:4px 0 0">Miner çıktısı</h3>
         <pre data-screen-log style="${pre};max-height:260px"></pre>`,
       onOpen: (dlg) => {
@@ -462,6 +471,49 @@ export async function rigView(el, [rigId]) {
         };
         tick();
         poll = setInterval(tick, 3000);
+
+        // Komut satırı: izinli komutlar rig'e gider, çıktısı burada görünür
+        const term = dlg.querySelector('[data-term]');
+        const input = dlg.querySelector('[data-term-input]');
+        const print = (text) => {
+          term.style.display = '';
+          term.textContent += `${term.textContent ? '\n' : ''}${text}`;
+          term.scrollTop = term.scrollHeight;
+        };
+        const HELP = ['miner start · miner stop · miner restart · miner log', 'oc (OC değerlerini tekrar uygula) · sreboot (rig\'i yeniden başlat)',
+          'nvidia-smi · clinfo (AMD OpenCL) · lspci (kartlar) · dmesg (sistem hataları)',
+          'uptime · free · df · ip · ping · log (agent kaydı) · bilgi · guncelle'].join('\n');
+        let busy = false;
+        const run = async (line) => {
+          line = line.trim();
+          if (!line || busy) return;
+          if (['yardim', 'yardım', 'help', 'wm yardim'].includes(line.toLowerCase())) return print(`$ ${line}\n${HELP}`);
+          if (['sreboot', 'reboot'].includes(line.toLowerCase())
+            && !(await confirmDialog('Rig yeniden başlatılsın mı?', 'Miner durur, rig birkaç dakika içinde tekrar açılır.', 'Yeniden başlat'))) return;
+          busy = true;
+          print(`$ ${line}`);
+          try {
+            const { id } = await api(`rigs/${rigId}/console`, { method: 'POST', body: { line } });
+            const until = Date.now() + 60_000;
+            for (;;) {
+              await new Promise((r) => setTimeout(r, 1500));
+              const c = await api(`rigs/${rigId}/commands/${id}`);
+              if (c.status === 'done' || c.status === 'failed' || c.status === 'expired') {
+                print(c.result || (c.status === 'done' ? '(tamam)' : `(${c.status})`));
+                break;
+              }
+              if (Date.now() > until) { print('(rig 60 sn içinde yanıt vermedi; sonuç sonra "Son komutlar"da görünür)'); break; }
+            }
+          } catch (err) { print(`! ${err.message}`); } finally { busy = false; }
+        };
+        input.addEventListener('keydown', (e) => {
+          if (e.key !== 'Enter') return;
+          e.preventDefault();
+          run(input.value);
+          input.value = '';
+        });
+        dlg.querySelector('[data-term-send]').addEventListener('click', () => { run(input.value); input.value = ''; });
+        dlg.querySelectorAll('[data-term-quick]').forEach((b) => b.addEventListener('click', () => run(b.dataset.termQuick)));
         dlg.addEventListener('close', () => clearInterval(poll));
       },
     });

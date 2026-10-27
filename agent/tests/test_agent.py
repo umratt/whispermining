@@ -157,6 +157,37 @@ class ConsoleTest(unittest.TestCase):
                 th.join()
             self.assertEqual(os.listdir(os.path.join(d, "cmd")), [])   # komut ve sonuç dosyası temizlendi
 
+
+class RemoteConsoleTest(unittest.TestCase):
+    """Panelin rig ekranından yazılan komutlar: sadece izinli liste, kabuk yok."""
+
+    def agent(self):
+        from whisperagent import agent as agent_mod
+        a = object.__new__(agent_mod.Agent)
+        a.exec_basic = lambda t: ("done", 0, f"{t} tamam")
+        a.miners = []
+        return a
+
+    def test_basic_commands_map(self):
+        a = self.agent()
+        self.assertEqual(a.console_exec("miner restart"), ("done", 0, "miner_restart tamam"))
+        self.assertEqual(a.console_exec("oc")[2], "apply_oc tamam")
+
+    def test_unknown_and_shell_rejected(self):
+        a = self.agent()
+        for bad in ("rm -rf /", "nvidia-smi; reboot", "bash", ""):
+            self.assertEqual(a.console_exec(bad)[0], "failed", bad)
+
+    def test_diag_runs_fixed_argv(self):
+        from unittest import mock
+        a = self.agent()
+        fake = mock.Mock(returncode=0, stdout="01:00.0 VGA compatible controller: NVIDIA\n02:00.0 USB controller\n", stderr="")
+        with mock.patch("subprocess.run", return_value=fake) as run:
+            st, _code, out = a.console_exec("lspci")
+        run.assert_called_once()
+        self.assertEqual(run.call_args[0][0], ["lspci"])
+        self.assertEqual((st, out), ("done", "01:00.0 VGA compatible controller: NVIDIA"))
+
 if __name__ == "__main__":
     unittest.main()
 

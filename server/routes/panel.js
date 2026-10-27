@@ -7,7 +7,7 @@ const sec = require('../security');
 const rigsSvc = require('../services/rigs');
 const vault = require('../services/confvault');
 const telegram = require('../services/telegram');
-const { COMMAND_TYPES } = require('./agent');
+const { COMMAND_TYPES, CONSOLE_COMMANDS } = require('./agent');
 
 const router = express.Router();
 router.use(express.json({ limit: '64kb' }));
@@ -337,12 +337,34 @@ router.post('/rigs/:id/commands', (req, res) => {
   const r = rigsSvc.ownedRig(req.user.id, req.params.id);
   if (!r) return bad(res, 'Rig bulunamadı.', 404);
   const type = String(req.body.type || '');
-  if (!COMMAND_TYPES.has(type) || type.startsWith('oc_tune')) return bad(res, 'Geçersiz komut.'); // otomatik OC kendi uç noktasından
+  if (!COMMAND_TYPES.has(type) || type.startsWith('oc_tune') || type === 'console') return bad(res, 'Geçersiz komut.'); // bunların kendi uç noktası var
   const dup = get(`SELECT id FROM commands WHERE rig_id = ? AND type = ? AND status IN ('queued','sent')`, r.id, type);
   if (dup) return bad(res, 'Bu komut zaten sırada bekliyor.', 409);
   const c = run('INSERT INTO commands (rig_id, type, payload, created_by, created_at) VALUES (?,?,?,?,?)',
     r.id, type, '{}', req.user.id, now());
   res.json({ ok: true, id: Number(c.lastInsertRowid) });
+});
+
+// Rig ekranından yazılan komut (izinli listeden). Sonuç GET /rigs/:id/commands/:cid ile alınır.
+router.post('/rigs/:id/console', sec.rateLimit({ windowSec: 60, max: 30, key: (req) => `console:${req.user.id}` }), (req, res) => {
+  const r = rigsSvc.ownedRig(req.user.id, req.params.id);
+  if (!r) return bad(res, 'Rig bulunamadı.', 404);
+  const line = str(req.body.line, 60).toLowerCase().replace(/\s+/g, ' ').replace(/^(wm|sudo) /, '');
+  const cmd = line === 'reboot' ? 'sreboot' : line === 'miner' ? 'miner log' : line;
+  if (!CONSOLE_COMMANDS.includes(cmd)) return bad(res, `Bu komut yok: "${line}". Liste için: yardim`);
+  if (!r.last_seen_at || r.last_seen_at < now() - ONLINE_SEC) return bad(res, 'Rig çevrimdışı.');
+  const c = run('INSERT INTO commands (rig_id, type, payload, created_by, created_at) VALUES (?,?,?,?,?)',
+    r.id, 'console', JSON.stringify({ cmd }), req.user.id, now());
+  res.json({ ok: true, id: Number(c.lastInsertRowid), cmd });
+});
+
+router.get('/rigs/:id/commands/:cid', (req, res) => {
+  const r = rigsSvc.ownedRig(req.user.id, req.params.id);
+  if (!r) return bad(res, 'Rig bulunamadı.', 404);
+  const c = get('SELECT id, type, status, result FROM commands WHERE id = ? AND rig_id = ?', Number(req.params.cid), r.id);
+  if (!c) return bad(res, 'Komut bulunamadı.', 404);
+  res.set('Cache-Control', 'no-store');
+  res.json(c);
 });
 
 // ---------- Otomatik OC ----------

@@ -12,7 +12,10 @@ const router = express.Router();
 router.use(express.json({ limit: '64kb' }));
 
 const str = (v, max = 200) => (v === undefined || v === null ? null : String(v).slice(0, max));
-const COMMAND_TYPES = new Set(['miner_start', 'miner_stop', 'miner_restart', 'reboot', 'apply_oc', 'oc_tune', 'oc_tune_cancel']);
+const COMMAND_TYPES = new Set(['miner_start', 'miner_stop', 'miner_restart', 'reboot', 'apply_oc', 'oc_tune', 'oc_tune_cancel', 'console']);
+// Panelden rig'e yazılabilen komutlar (rig ekranı). Serbest kabuk komutu yok: agent sadece bu listeyi tanır.
+const CONSOLE_COMMANDS = ['miner start', 'miner stop', 'miner restart', 'miner log', 'oc', 'sreboot', 'nvidia-smi', 'clinfo',
+  'uptime', 'df', 'free', 'ip', 'ping', 'lspci', 'dmesg', 'log', 'bilgi', 'guncelle'];
 // Otomatik OC uzun sürer: rig'e gönderildikten sonra bu kadar süre sonuç beklenir
 const LONG_COMMANDS = { oc_tune: 4 * 3600 };
 const SCREEN_POLL_SEC = 3; // panelde ekran izlenirken agent'ın bağlanma aralığı
@@ -193,7 +196,7 @@ router.post('/commands/:id/result', requirePaired, (req, res) => {
   if (!cmd) return res.status(404).json({ error: 'command_not_found' });
   if (!['queued', 'sent'].includes(cmd.status)) return res.status(409).json({ error: 'already_finished' });
   const status = b.status === 'done' ? 'done' : 'failed';
-  let output = str(b.output, 4000);
+  let output = str(b.output, cmd.type === 'console' ? 12000 : 4000); // nvidia-smi gibi çıktılar uzun olabilir
   if (cmd.type === 'oc_tune' && status === 'done') {
     // Agent sonucu JSON olarak verir: önerilen değerler yeni bir OC profili olarak kaydedilir (atama kullanıcıya kalır)
     const r = rigsSvc.parseJson(String(b.output || '').slice(0, 32000), null); // kart kart sonuç 4000 karakteri aşabilir
@@ -232,4 +235,4 @@ function compareVersions(a, b) {
   return 0;
 }
 
-module.exports = { router, COMMAND_TYPES, LONG_COMMANDS, compareVersions };
+module.exports = { router, COMMAND_TYPES, CONSOLE_COMMANDS, LONG_COMMANDS, compareVersions };
