@@ -49,14 +49,13 @@ function themeToggle() {
 }
 
 function shell() {
-  const alerts = state.me.open_alerts;
-  const badge = alerts ? html`<span class="badge bad" data-alert-badge>${alerts}</span>` : html`<span class="badge bad hidden" data-alert-badge></span>`;
+  // Menüde uyarı sayısı rozeti gösterilmez (kullanıcı isteği); aktif uyarılar Uyarılar sayfasında ve rig kartlarında görünür
   return html`
     <div class="layout">
       <aside class="sidebar">
         <a class="brand" href="./" title="Ana sayfa"><img src="img/icon.svg" alt="">WhisperMining</a>
         <nav class="nav">
-          ${NAV.map((n) => html`<a href="${n.path}" data-nav="${n.path}">${icon(n.icon)}${n.label}${n.path === 'alerts' ? badge : ''}</a>`)}
+          ${NAV.map((n) => html`<a href="${n.path}" data-nav="${n.path}">${icon(n.icon)}${n.label}</a>`)}
         </nav>
         <div class="sidebar-foot nav">
           <div class="who">${state.me.email}</div>
@@ -72,7 +71,7 @@ function shell() {
       </header>
       <main class="main" id="view"></main>
       <nav class="tabbar">
-        ${NAV.filter((n) => !n.desktopOnly).map((n) => html`<a href="${n.path}" data-nav="${n.path}">${icon(n.icon)}${n.short}${n.path === 'alerts' ? badge : ''}</a>`)}
+        ${NAV.filter((n) => !n.desktopOnly).map((n) => html`<a href="${n.path}" data-nav="${n.path}">${icon(n.icon)}${n.short}</a>`)}
       </nav>
     </div>`;
 }
