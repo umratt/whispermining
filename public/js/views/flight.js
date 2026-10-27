@@ -1,12 +1,30 @@
 import { api, html, icon, openDialog, confirmDialog, toast, formData } from '../lib.js';
 
+// Bilinen havuzlar (27.10.2026'da stratum el sıkışmasıyla tek tek doğrulandı). İlk sıradaki önerilen.
+const POOLS = {
+  ETC: [['2Miners', 'etc.2miners.com:1010'], ['HeroMiners', 'etc.herominers.com:1150'], ['Kryptex', 'etc.kryptex.network:7033'],
+    ['F2Pool', 'etc.f2pool.com:8118'], ['WoolyPooly', 'pool.woolypooly.com:35000']],
+  RVN: [['2Miners', 'rvn.2miners.com:6060'], ['HeroMiners', 'ravencoin.herominers.com:1140'], ['Kryptex', 'rvn.kryptex.network:7031'],
+    ['Nanopool', 'rvn-eu1.nanopool.org:10400'], ['WoolyPooly', 'pool.woolypooly.com:55555']],
+  ERG: [['2Miners', 'erg.2miners.com:8888'], ['HeroMiners', 'ergo.herominers.com:1180'], ['Kryptex', 'erg.kryptex.network:7021'],
+    ['WoolyPooly', 'pool.woolypooly.com:3100']],
+  KAS: [['2Miners', 'kas.2miners.com:2020'], ['HeroMiners', 'kaspa.herominers.com:1206'], ['Kryptex', 'kas.kryptex.network:7777'],
+    ['F2Pool', 'kas.f2pool.com:1400'], ['WoolyPooly', 'pool.woolypooly.com:3112']],
+  ALPH: [['HeroMiners', 'alephium.herominers.com:1199'], ['Kryptex', 'alph.kryptex.network:7777'], ['WoolyPooly', 'pool.woolypooly.com:3106']],
+  CFX: [['HeroMiners', 'conflux.herominers.com:1170'], ['F2Pool', 'cfx.f2pool.com:6800'], ['WoolyPooly', 'pool.woolypooly.com:3094']],
+  FIRO: [['WoolyPooly', 'pool.woolypooly.com:3104']],
+};
+const poolUrl = (hp) => `stratum+tcp://${hp}`;
+const KNOWN_POOLS = new Set(Object.values(POOLS).flat().map(([, hp]) => poolUrl(hp)));
 // [coin, algoritma, önerilen havuz]
-const COINS = [
-  ['ETC', 'etchash', 'stratum+tcp://etc.2miners.com:1010'], ['RVN', 'kawpow', 'stratum+tcp://rvn.2miners.com:6060'],
-  ['ERG', 'autolykos2', 'stratum+tcp://erg.2miners.com:8888'], ['CFX', 'octopus'], ['FIRO', 'firopow', 'stratum+tcp://firo.2miners.com:8181'],
-  ['KAS', 'kaspa'], ['ALPH', 'alephium'], ['BEAM', 'beamhash'],
-];
+const COINS = [['ETC', 'etchash'], ['RVN', 'kawpow'], ['ERG', 'autolykos2'], ['CFX', 'octopus'], ['FIRO', 'firopow'],
+  ['KAS', 'kaspa'], ['ALPH', 'alephium'], ['BEAM', 'beamhash']].map(([c, a]) => [c, a, POOLS[c] ? poolUrl(POOLS[c][0][1]) : undefined]);
 const coinInfo = (c) => COINS.find(([k]) => k === String(c || '').trim().toUpperCase());
+const poolOptions = (coin) => {
+  const list = POOLS[String(coin || '').trim().toUpperCase()] || [];
+  return list.length ? `<option value="">Hazır havuz seçin…</option>${list.map(([n, hp]) => `<option value="${poolUrl(hp)}">${n} · ${hp}</option>`).join('')}`
+    : '<option value="">Bu coin için hazır havuz yok, adresi elle yazın</option>';
+};
 const VENDOR_LABEL = { all: 'Tüm kartlar', nvidia: 'Sadece NVIDIA', amd: 'Sadece AMD' };
 
 export async function flightView(el) {
@@ -123,7 +141,9 @@ export async function flightView(el) {
           <div class="field full"><label>Cüzdan</label><select name="wallet_id">${wallets.map((w) => html`<option value="${w.id}" ${w.id === f?.wallet_id ? 'selected' : ''}>${w.coin} · ${w.name}</option>`)}</select></div>
           <div class="field full"><label>Havuz adresleri</label>
             <textarea class="mono" name="pools" spellcheck="false" placeholder="${coinInfo(startCoin)?.[2] || 'stratum+tcp://havuz-adresi:port'}">${(f?.pools || (f ? [] : [coinInfo(startCoin)?.[2]].filter(Boolean))).join('\n')}</textarea>
-            <span class="hint">Her satıra bir adres. İlki ana havuz, diğerleri yedek.</span></div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px"><select name="pool_pick" style="flex:1;min-width:220px">${html([poolOptions(startCoin)])}</select>
+              <button type="button" class="btn sm" data-pool-backup>${icon('plus')}Yedek olarak ekle</button></div>
+            <span class="hint">Her satıra bir adres. İlki ana havuz, diğerleri yedek. Listeden seçince ana havuz değişir.</span></div>
           <div class="field"><label>Worker adı</label><input class="input mono" name="worker_template" value="${f?.worker_template || '%RIG_NAME%'}" maxlength="40">
             <span class="hint">%RIG_NAME% rig adıyla değiştirilir.</span></div>
           <div class="field"><label>Havuz şifresi</label><input class="input mono" name="pool_pass" value="${f?.pool_pass || 'x'}" maxlength="60"></div>
@@ -159,17 +179,29 @@ export async function flightView(el) {
           });
         };
         const setCoin = (coin) => {
-          const prev = coinInfo(coinEl.value);
           const info = coinInfo(coin);
           coinEl.value = String(coin).toUpperCase();
           if (!info) return;
           algoEl.value = info[1];
           poolsEl.placeholder = info[2] || 'stratum+tcp://havuz-adresi:port';
-          // Havuz boşsa ya da önceki coin'in önerisi duruyorsa yenisiyle değiştir
-          const cur = poolsEl.value.trim();
-          if (!cur || (prev && cur === prev[2])) poolsEl.value = info[2] || '';
+          pickEl.innerHTML = poolOptions(info[0]);
+          // Havuz boşsa ya da sadece listeden seçilmiş havuzlar duruyorsa yeni coin'in önerisiyle değiştir
+          const lines = poolsEl.value.split(/\s+/).filter(Boolean);
+          if (!lines.length || lines.every((l) => KNOWN_POOLS.has(l))) poolsEl.value = info[2] || '';
           filterMiners();
         };
+        const pickEl = fm.querySelector('[name=pool_pick]');
+        const poolLines = () => poolsEl.value.split(/\s+/).filter(Boolean);
+        pickEl.addEventListener('change', () => {
+          if (!pickEl.value) return;
+          const rest = poolLines().slice(1).filter((l) => l !== pickEl.value);
+          poolsEl.value = [pickEl.value, ...rest].join('\n');
+        });
+        fm.querySelector('[data-pool-backup]').addEventListener('click', () => {
+          if (!pickEl.value) return toast('Önce listeden bir havuz seçin.');
+          const lines = poolLines();
+          if (!lines.includes(pickEl.value)) poolsEl.value = [...lines, pickEl.value].join('\n');
+        });
         walletEl.addEventListener('change', () => {
           const w = wallets.find((x) => String(x.id) === walletEl.value);
           if (w) setCoin(w.coin);

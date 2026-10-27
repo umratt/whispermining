@@ -82,6 +82,34 @@ export const COMMAND_STATUS = { queued: ['Sırada', 'warn'], sent: ['Gönderildi
 export const ALERT_LABELS = { offline: 'Rig çevrimdışı', gpu_lost: 'Kart kayboldu', high_temp: 'Sıcaklık yüksek', hashrate_drop: 'Hashrate düştü', hw_changed: 'Donanım değişti', new_gpu: 'Yeni kart algılandı', no_miner: 'Kart boşta' };
 
 // Metni dosya olarak indir (rig.conf için)
+// Sunucudan "attachment" olarak gelen dosyayı indirir (sayfa değişmez)
+export function downloadUrl(url) {
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'rig.conf';
+  (document.querySelector('dialog[open]') || document.body).append(a);
+  a.click();
+  a.remove();
+}
+
+// rig.conf içeriğini gösteren kutu: indirme bağlantısı + elle kopyalama yedeği
+export function confBox(res) {
+  return html`<div class="conf-box" style="display:flex;flex-direction:column;gap:8px">
+    <div class="btn-row"><a class="btn primary" href="${res.conf_url}" download="rig.conf">${icon('download')}rig.conf indir</a>
+      <button type="button" class="btn" data-conf-copy>${icon('copy')}İçeriği kopyala</button></div>
+    <textarea class="mono small" readonly rows="7" spellcheck="false" data-conf-text>${res.conf}</textarea>
+    <span class="hint">İndirme olmazsa: içeriği kopyalayın, Not Defteri'ne yapıştırıp flash'taki WMINING sürücüsüne <strong>rig.conf</strong> adıyla kaydedin. Bağlantı 15 dk geçerlidir; içerik bu rig'in anahtarıdır, kimseyle paylaşmayın.</span>
+  </div>`;
+}
+
+export function wireConfBox(root) {
+  root.querySelector('[data-conf-copy]')?.addEventListener('click', async () => {
+    const ta = root.querySelector('[data-conf-text]');
+    try { await navigator.clipboard.writeText(ta.value); } catch { ta.select(); document.execCommand('copy'); }
+    toast('rig.conf içeriği kopyalandı.');
+  });
+}
+
 export function downloadText(filename, text) {
   const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
   const a = document.createElement('a');
@@ -170,5 +198,6 @@ const ICONS = {
   apply: '<path d="M20 6 9 17l-5-5"/>',
   usb: '<rect x="7" y="2" width="10" height="8" rx="1"/><path d="M5 10h14v6a6 6 0 0 1-6 6h-2a6 6 0 0 1-6-6z"/><path d="M10 5h.01M14 5h.01"/>',
   download: '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>',
+  copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/>',
 };
 export const icon = (name) => raw(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`);

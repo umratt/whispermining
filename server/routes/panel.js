@@ -119,6 +119,29 @@ router.get('/rigs', (req, res) => {
   res.json({ rigs: rows.map((r) => rigSummary(r, t)) });
 });
 
+// rig.conf indirme: dosya sunucudan "attachment" olarak verilir (tarayıcıda üretilen blob indirmesi her tarayıcıda
+// çalışmıyor). Anahtar diske yazılmaz; sadece bellekte, oluşturan kullanıcıya özel ve 15 dk geçerli tutulur.
+const CONF_TTL_SEC = 900;
+const pendingConf = new Map();
+function confDownload(userId, rig, secret) {
+  const t = now();
+  for (const [k, v] of pendingConf) if (v.expires < t) pendingConf.delete(k);
+  const token = sec.randomToken(24);
+  const text = rigsSvc.rigConfText(rig, secret, config.publicUrl);
+  pendingConf.set(token, { userId, rigId: rig.id, text, expires: t + CONF_TTL_SEC });
+  return { conf: text, conf_url: `api/rig-conf/${token}` };
+}
+
+router.get('/rig-conf/:token', (req, res) => {
+  const p = pendingConf.get(String(req.params.token));
+  if (!p || p.expires < now() || p.userId !== req.user.id) {
+    return res.status(404).type('text/plain; charset=utf-8')
+      .send("Bu indirme bağlantısının süresi doldu. Rig ayarlarından \"rig.conf'u yeniden oluştur\" ile yenisini alın.");
+  }
+  res.set({ 'Content-Type': 'application/octet-stream', 'Content-Disposition': 'attachment; filename="rig.conf"', 'Cache-Control': 'no-store' });
+  res.send(p.text);
+});
+
 // rig.conf ile ekleme: rig önceden oluşturulur ve hesaba bağlanır. Agent dosyadaki anahtarla doğrudan bağlanır.
 router.post('/rigs', sec.rateLimit({ windowSec: 600, max: 30, key: (req) => `rigcreate:${req.user.id}` }), (req, res) => {
   const name = str(req.body.name, 40);
@@ -129,7 +152,7 @@ router.post('/rigs', sec.rateLimit({ windowSec: 600, max: 30, key: (req) => `rig
   const t = now();
   run(`INSERT INTO rigs (id, owner_id, name, secret_hash, paired_at, created_at) VALUES (?,?,?,?,?,?)`,
     rig.id, req.user.id, name, sec.sha256(secret), t, t);
-  res.json({ ok: true, rig_id: rig.id, conf: rigsSvc.rigConfText(rig, secret, config.publicUrl) });
+  res.json({ ok: true, rig_id: rig.id, ...confDownload(req.user.id, rig, secret) });
 });
 
 // Anahtarı yenile: eski rig.conf hemen geçersiz olur, yeni dosya bir kez verilir
@@ -138,7 +161,7 @@ router.post('/rigs/:id/rotate-secret', (req, res) => {
   if (!r) return bad(res, 'Rig bulunamadı.', 404);
   const secret = sec.randomToken(32);
   run('UPDATE rigs SET secret_hash = ?, hw_changed_at = NULL WHERE id = ?', sec.sha256(secret), r.id);
-  res.json({ ok: true, conf: rigsSvc.rigConfText(r, secret, config.publicUrl) });
+  res.json({ ok: true, ...confDownload(req.user.id, r, secret) });
 });
 
 router.post('/rigs/pair',sec.rateLimit({ windowSec: 600, max: 20, key: (req) => `pair:${req.user.id}` }), (req, res) => {

@@ -1,4 +1,4 @@
-import { api, html, icon, splitHash, fmtHash, fmtPower, fmtTemp, tempClass, ago, MINER_STATUS, openDialog, toast, downloadText } from '../lib.js';
+import { api, html, icon, splitHash, fmtHash, fmtPower, fmtTemp, tempClass, ago, MINER_STATUS, openDialog, toast, downloadUrl, confBox, wireConfBox } from '../lib.js';
 import { navigate, setAlertBadge } from '../app.js';
 
 function rigCard(r) {
@@ -61,15 +61,15 @@ export function openPairDialog() {
           <input class="input" id="pair-name" name="name" maxlength="40" placeholder="ör. Salon-1"><span class="hint">Boş bırakılırsa rig'in kendi adı kullanılır.</span></div>
       </div>
       <div data-panel="done" class="hidden" style="flex-direction:column;gap:12px">
-        <div class="callout" style="background:var(--accent-soft);color:var(--ok)"><strong>rig.conf indirildi.</strong> Bu dosyadaki anahtar bir daha gösterilmez.</div>
+        <div class="callout" style="background:var(--accent-soft);color:var(--ok)"><strong>Rig oluşturuldu.</strong> rig.conf indirilmediyse aşağıdaki düğmeye basın.</div>
+        <div data-conf-slot></div>
         <ol class="muted" style="margin:0;padding-left:20px;line-height:1.7">
           <li>Flash belleği bilgisayara takın, <strong>WMINING</strong> adlı bölümü açın.</li>
           <li><strong>rig.conf</strong> dosyasını oraya kopyalayın (varsa üzerine yazın).</li>
           <li>Flash'ı rig'e takıp açın. Birkaç dakika içinde panelde çevrimiçi görünür.</li>
         </ol>
         <a href="setup" data-setup-link class="small">İmaj indirme ve ayrıntılı kurulum rehberi →</a>
-        <div class="btn-row"><button type="button" class="btn" data-redownload>Tekrar indir</button>
-          <button type="button" class="btn primary" data-goto>Rig sayfasına git</button></div>
+        <div class="btn-row"><button type="button" class="btn" data-goto>Rig sayfasına git</button></div>
       </div>`,
     onOpen: (dlg) => {
       const submit = dlg.querySelector('[data-submit]');
@@ -88,7 +88,6 @@ export function openPairDialog() {
       });
       const code = dlg.querySelector('#pair-code');
       code.addEventListener('input', () => formatCode(code));
-      dlg.querySelector('[data-redownload]').addEventListener('click', () => downloadText('rig.conf', created.conf));
       dlg.querySelector('[data-goto]').addEventListener('click', () => { dlg.close(); navigate(`rigs/${created.rig_id}`); });
       dlg.addEventListener('close', () => { created = null; });
       dlg.querySelector('[data-setup-link]').addEventListener('click', () => dlg.close());
@@ -107,8 +106,11 @@ export function openPairDialog() {
         return true;
       }
       created = await api('rigs', { method: 'POST', body: { name: form.conf_name.value } });
-      downloadText('rig.conf', created.conf);
+      const slot = dlg.querySelector('[data-conf-slot]');
+      slot.innerHTML = String(confBox(created));
+      wireConfBox(slot);
       dlg._showDone();
+      downloadUrl(created.conf_url);
       return false; // diyalog açık kalsın: kurulum adımları gösterilir
     },
   });

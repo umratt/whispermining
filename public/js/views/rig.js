@@ -1,6 +1,6 @@
 import {
   api, html, icon, fmtHash, fmtPower, fmtTemp, fmtPct, tempClass, ago, duration, dateTime, state,
-  MINER_STATUS, COMMAND_LABELS, COMMAND_STATUS, ALERT_LABELS, openDialog, confirmDialog, toast, formData, downloadText,
+  MINER_STATUS, COMMAND_LABELS, COMMAND_STATUS, ALERT_LABELS, openDialog, confirmDialog, toast, formData, downloadUrl, confBox, wireConfBox,
 } from '../lib.js';
 import { navigate } from '../app.js';
 import { timeChart, emptyNote } from '../charts.js';
@@ -296,9 +296,12 @@ export async function rigView(el, [rigId]) {
           dlg.close();
           if (!(await confirmDialog('rig.conf yeniden oluşturulsun mu?', `"${r.name}" için yeni anahtar üretilecek. Eski rig.conf ile bağlanan rig, yeni dosya flash'a kopyalanana kadar bağlanamaz.`, 'Yeniden oluştur'))) return;
           const res = await api(`rigs/${rigId}/rotate-secret`, { method: 'POST' });
-          downloadText('rig.conf', res.conf);
-          toast('Yeni rig.conf indirildi. Flash belleğe kopyalayın.');
           await load();
+          openDialog({
+            title: 'Yeni rig.conf',
+            body: html`<p class="muted" style="margin:0">Dosyayı flash belleğin <strong>WMINING</strong> bölümüne kopyalayın (eskisinin üzerine yazın).</p>${confBox(res)}`,
+            onOpen: (d) => { wireConfBox(d); downloadUrl(res.conf_url); },
+          });
         });
         dlg.querySelector('[data-delete]').addEventListener('click', async () => {
         dlg.close();
