@@ -360,7 +360,8 @@ class Agent:
             self.run_commands()
         self.poll = int(res.get("poll_interval_sec") or self.poll)
 
-        if time.monotonic() > self.next_update_check:
+        # Otomatik OC sürerken güncelleme yapılmaz: yeniden başlama yarım kalan denemeyi kaybettirir
+        if time.monotonic() > self.next_update_check and not self.tuner:
             self.next_update_check = time.monotonic() + 6 * 3600
             self.check_update()
 

@@ -83,6 +83,14 @@ router.get('/status', (req, res) => {
     run('UPDATE rigs SET pairing_code = ?, pairing_expires_at = ? WHERE id = ?', newPairingCode(), now() + config.pairingTtlSec, rig.id);
     rig = get('SELECT * FROM rigs WHERE id = ?', rig.id);
   }
+  // Agent her açılışta bir kez /status çağırır: yarıda kalmış otomatik OC artık rig'de yok, "sürüyor" görünmesin
+  const orphan = get(`SELECT id FROM commands WHERE rig_id = ? AND type = 'oc_tune' AND status = 'sent'`, rig.id);
+  if (orphan) {
+    const msg = "Rig yeniden başladığı için otomatik OC yarıda kaldı. Tekrar başlatabilirsiniz.";
+    run('UPDATE commands SET status = ?, exit_code = 1, result = ?, finished_at = ? WHERE id = ?', 'failed', msg, now(), orphan.id);
+    const prev = rigsSvc.parseJson(rig.tune_state, {}) || {};
+    run('UPDATE rigs SET tune_state = ? WHERE id = ?', JSON.stringify({ ...prev, status: 'failed', message: msg, updated_at: now() }).slice(0, 4000), rig.id);
+  }
   res.json({
     paired: !!rig.owner_id,
     rig_name: rig.name,

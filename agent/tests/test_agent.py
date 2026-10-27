@@ -165,6 +165,14 @@ class NewMinersTest(unittest.TestCase):
         self.assertEqual(s["03:00.0"]["hashrate"], 21e6)
         self.assertEqual(s["0a:00.0"]["hashrate"], 30e6)
 
+    def test_bzminer_hive_shares(self):
+        # Kart başına kabul bilgisi varsa kartlara, yoksa toplam ilk karta yazılır (Dükkan rig'inde 0 görünüyordu)
+        s = self.stats_with("bzminer", {"/hive_status": {"hs": [21000.0, 30000.0], "hs_units": "khs", "bus_numbers": [3, 10],
+                                                         "ar": [12, 1, 0, "5;7"]}})
+        self.assertEqual((s["03:00.0"]["accepted"], s["0a:00.0"]["accepted"]), (5, 7))
+        s = self.stats_with("bzminer", {"/hive_status": {"hs": [40000.0], "hs_units": "khs", "bus_numbers": [10], "ar": [33, 2]}})
+        self.assertEqual((s["0a:00.0"]["accepted"], s["0a:00.0"]["rejected"]), (33, 2))
+
 
 class TunerTest(unittest.TestCase):
     """Kart başına otomatik OC: sahte kartlarla, simüle edilmiş zamanda uçtan uca."""

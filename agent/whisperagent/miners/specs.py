@@ -208,10 +208,22 @@ def generic_devices(data, gpus):
     out = {}
     if isinstance(data, dict) and isinstance(data.get("hs"), list) and isinstance(data.get("bus_numbers"), list):
         mult = {"hs": 1, "khs": 1e3, "mhs": 1e6, "ghs": 1e9}.get(str(data.get("hs_units", "khs")).lower(), 1e3)
+        # ar: [kabul, red, (geçersiz), ("k1;k2;..." kart başına kabul)]
+        ar = data.get("ar") if isinstance(data.get("ar"), list) else []
+        per_gpu = str(ar[3]).split(";") if len(ar) > 3 and isinstance(ar[3], str) else None
         for i, h in enumerate(data["hs"]):
             bus = _match_bus(data["bus_numbers"][i] if i < len(data["bus_numbers"]) else None, gpus)
             if bus and _num(h) is not None:
                 out[bus] = {"hashrate": _num(h) * mult, "accepted": None, "rejected": None}
+                if per_gpu and i < len(per_gpu):
+                    try:
+                        out[bus]["accepted"] = float(per_gpu[i])
+                    except ValueError:
+                        pass
+        # Kart başına bilgi yoksa toplam ilk karta yazılır (rig toplamı doğru kalsın)
+        if out and ar and not per_gpu:
+            first = next(iter(out.values()))
+            first["accepted"], first["rejected"] = _num(ar[0]), _num(ar[1]) if len(ar) > 1 else None
         return out
 
     def walk(node):
