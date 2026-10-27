@@ -159,7 +159,7 @@ export async function rigView(el, [rigId]) {
         <div class="card-head"><h2>Otomatik OC sürüyor · ${t.model}</h2><button class="btn sm danger" data-tune-cancel>${icon('stop')}İptal</button></div>
         <div class="card-pad">
           ${t.status === 'queued' ? html`<p class="muted" style="margin:0">Komut rig'e gönderiliyor…</p>` : html`
-          ${stale ? html`<div class="callout warn" style="margin-bottom:10px">Rig'den ${r.online ? '90 sn\'dir' : 'şu an'} haber yok. Rig yeniden başladıysa otomatik OC yarıda kalmıştır; rig bağlanınca durum güncellenir.</div>` : ''}
+          ${stale ? html`<div class="callout warn" style="margin-bottom:10px">Rig'den ${r.online ? '90 sn\'dir' : 'şu an'} haber yok. Rig yeniden başladıysa otomatik OC yarıda kalmıştır; rig bağlanınca durum güncellenir. "İptal" ile bu kaydı hemen kapatabilirsiniz.</div>` : ''}
           ${el2 !== null ? html`<div style="margin-bottom:10px">
             <div class="small" style="display:flex;justify-content:space-between"><span>Adım ${t.step + 1} · ${settling ? 'değerler oturuyor (ölçüm sayılmaz)' : 'ölçülüyor'}</span>
               <span class="dim">${mmss(el2)} / ${mmss(t.step_sec)}</span></div>
@@ -231,7 +231,15 @@ export async function rigView(el, [rigId]) {
     if (!c.result) return '';
     const text = c.result;
     if (c.type === 'oc_tune') {
-      try { const r = JSON.parse(text); if (r.summary) return html`<div class="small dim">${r.summary}</div>`; } catch { /* düz yazı */ }
+      try {
+        const r = JSON.parse(text);
+        if (r.summary) return html`<div class="small dim">${r.summary}</div>`;
+        if (Array.isArray(r.cards)) { // özetsiz sonuç: kart kart ne olduğu
+          const bad = r.cards.filter((c) => c.failed);
+          return html`<div class="small dim">${r.cards.length}× ${r.model || 'kart'} · ${r.algo || ''}${bad.length ? html` · <span class="t-warn">${bad.length} kart sorunlu</span>` : ' · tamamlandı'}</div>
+            ${bad.map((c) => html`<div class="small dim" style="overflow-wrap:anywhere">GPU ${c.idx} (${c.bus_id}): ${c.failed}</div>`)}`;
+        }
+      } catch { /* düz yazı */ }
     }
     if (text.length <= 160 && !text.includes('\n')) return html`<div class="small dim" style="overflow-wrap:anywhere">${text}</div>`;
     return html`<details><summary class="small dim" style="cursor:pointer">Çıktıyı göster (${text.split('\n').length} satır)</summary><pre class="cmd-out">${text}</pre></details>`;

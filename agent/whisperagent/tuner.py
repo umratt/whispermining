@@ -272,6 +272,14 @@ class Tuner:
             self.step_started = t - self.step_sec + 30  # yeterli örnek yok: biraz daha bekle
             return None
         global_ok = all(s["ok"] for s in good)
+        # Hiçbir kartın hashrate'i hiç okunamıyorsa sorun kart değil, miner verisi: kartları kararsız sayma, dur
+        if global_ok and not any((s["rows"][b].get("hashrate") or 0) > 0 for s in good for b in self.cards):
+            for c in self.cards.values():
+                c.good = dict(c.start)
+            self.failed = ("Miner kartların hashrate'ini bildirmiyor, ölçüm yapılamadı. Kartlar eski değerlerinde. "
+                           "Miner'ın panelde hashrate gösterdiğinden emin olup tekrar başlatın.")
+            self.finished = True
+            return "finish"
         self.steps += 1
 
         if self.mode == "isolate":

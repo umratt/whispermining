@@ -476,7 +476,13 @@ router.post('/rigs/:id/oc-tune/cancel', (req, res) => {
   tx(() => {
     // Henüz rig'e gitmediyse doğrudan iptal; gittiyse agent'a durdurma komutu
     run(`UPDATE commands SET status = 'failed', result = 'Kullanıcı iptal etti', finished_at = ? WHERE rig_id = ? AND type = 'oc_tune' AND status = 'queued'`, now(), r.id);
-    if (get(`SELECT 1 FROM commands WHERE rig_id = ? AND type = 'oc_tune' AND status = 'sent'`, r.id)) {
+    // Rig çevrimdışıysa ya da otomatik OC 5 dk'dır haber vermiyorsa (rig yeniden başlamış) agent'ı bekleme: kayıt hemen kapansın
+    const prevTune = rigsSvc.parseJson(r.tune_state, {}) || {};
+    const gone = !r.last_seen_at || r.last_seen_at < now() - ONLINE_SEC || (prevTune.updated_at || 0) < now() - 300;
+    if (gone) {
+      run(`UPDATE commands SET status = 'failed', result = 'Rig yanıt vermedi, iptal edildi', finished_at = ? WHERE rig_id = ? AND type IN ('oc_tune','oc_tune_cancel') AND status IN ('queued','sent')`, now(), r.id);
+    }
+    if (!gone && get(`SELECT 1 FROM commands WHERE rig_id = ? AND type = 'oc_tune' AND status = 'sent'`, r.id)) {
       run('INSERT INTO commands (rig_id, type, payload, created_by, created_at) VALUES (?,?,?,?,?)', r.id, 'oc_tune_cancel', '{}', req.user.id, now());
     } else {
       const prev = rigsSvc.parseJson(r.tune_state, {}) || {};

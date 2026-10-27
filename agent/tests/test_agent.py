@@ -370,6 +370,25 @@ class TunerTest(unittest.TestCase):
         self.assertTrue(tu.finished)
         return hw, tu
 
+    def test_no_hashrate_from_miner(self):
+        """Miner kart hashrate'i vermiyorsa (ör. okunamayan API) kartlar kararsız sayılmaz, açık mesajla durulur."""
+        from whisperagent.hw.fake import FakeHardware
+        from whisperagent.tuner import Tuner
+        gpus = FakeHardware("p106").scan()
+        t = 1000.0
+        tu = Tuner(1, {"model": "NVIDIA P106-100", "vendor": "nvidia", "algo": "evrprogpow", "temp_limit": 85,
+                       "bounds": self.BOUNDS["nvidia"], "per_card": True, "start_by_bus": {}}, gpus, step_sec=60, t=t)
+        act = None
+        for _ in range(100):
+            t += 10
+            tu.feed([{"bus_id": g["bus_id"], "hashrate": 0, "power": 120, "temp": 60} for g in gpus], True, 0, t=t)
+            act = tu.advance(t)
+            if act == "finish":
+                break
+        self.assertEqual(act, "finish")
+        self.assertIn("hashrate'ini bildirmiyor", tu.failed)
+        self.assertEqual(tu.steps, 0)  # tek adımda anlaşıldı, kart denenmedi
+
     def assert_card_limits(self, hw, tu, vendor):
         r = tu.result()
         self.assertEqual(len(r["cards"]), len(tu.targets))
