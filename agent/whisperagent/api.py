@@ -74,7 +74,9 @@ class Api:
 
     def command_result(self, cmd_id, status, exit_code, output):
         return self.request("POST", f"/commands/{int(cmd_id)}/result",
-                            {"status": status, "exit_code": exit_code, "output": str(output)[:4000]})
+                            # Otomatik OC sonucu kart kart JSON: 8+ kartta 4000 karakteri aşar, kesilirse panel okuyamaz.
+                            # Sunucu komut türüne göre kendi sınırını uygular (konsol 12 KB, otomatik OC 100 KB).
+                            {"status": status, "exit_code": exit_code, "output": str(output)[:100000]})
 
     def update(self, channel="stable"):
         q = urllib.parse.urlencode({"version": VERSION, "channel": channel})

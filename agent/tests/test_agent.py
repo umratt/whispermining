@@ -516,3 +516,18 @@ class FailedCardTest(unittest.TestCase):
         self.assertEqual(run.call_count, 1)
         with mock.patch.object(self.nv, "pci_count", return_value=6):
             self.assertIsNone(self.nv.problem(6))
+
+
+class ApiResultTest(unittest.TestCase):
+    """Otomatik OC sonucu (8 kart, ~10 KB JSON) panele kesilmeden gitmeli; kesik JSON okunamaz."""
+
+    def test_long_tune_result_not_truncated(self):
+        import json
+        from unittest import mock
+        from whisperagent.api import Api
+        api = Api("https://example.com/mining")
+        big = json.dumps({"model": "NVIDIA P106-100", "cards": [{"idx": i, "history": ["x" * 1200]} for i in range(8)]})
+        self.assertGreater(len(big), 4000)
+        with mock.patch.object(Api, "request", return_value={"ok": True}) as req:
+            api.command_result(1, "done", 0, big)
+        self.assertEqual(json.loads(req.call_args[0][2]["output"])["cards"][7]["idx"], 7)
