@@ -9,16 +9,26 @@ const { buildAgentConfig } = rigsSvc;
 const { ingestStats } = require('../services/stats');
 
 const router = express.Router();
-router.use(express.json({ limit: '64kb' }));
+router.use(express.json({ limit: '256kb' })); // 14 kartlı rig: kart verisi + otomatik OC geçmişi + ekran
 
 const str = (v, max = 200) => (v === undefined || v === null ? null : String(v).slice(0, max));
 const COMMAND_TYPES = new Set(['miner_start', 'miner_stop', 'miner_restart', 'reboot', 'apply_oc', 'oc_tune', 'oc_tune_cancel', 'console']);
 // Panelden rig'e yazılabilen komutlar (rig ekranı). Serbest kabuk komutu yok: agent sadece bu listeyi tanır.
-const CONSOLE_COMMANDS = ['miner start', 'miner stop', 'miner restart', 'miner log', 'oc', 'sreboot', 'nvidia-smi', 'clinfo',
+const CONSOLE_COMMANDS = ['miner start', 'miner stop', 'miner restart', 'miner log', 'miner api', 'oc', 'sreboot', 'nvidia-smi', 'clinfo',
   'uptime', 'df', 'free', 'ip', 'ping', 'lspci', 'dmesg', 'log', 'bilgi', 'guncelle'];
 // Otomatik OC uzun sürer: rig'e gönderildikten sonra bu kadar süre sonuç beklenir
 const LONG_COMMANDS = { oc_tune: 4 * 3600 };
 const SCREEN_POLL_SEC = 3; // panelde ekran izlenirken agent'ın bağlanma aralığı
+// Otomatik OC durumu: kart başına denenen değer geçmişiyle büyür (14 kartta ~30 KB)
+const TUNE_MAX = 100000;
+// JSON ortadan kesilirse okunamaz: sığmazsa önce geçmiş listeleri kısaltılır
+function tuneJson(state) {
+  let json = JSON.stringify(state);
+  if (json.length <= TUNE_MAX) return json;
+  const trim = (cards) => (Array.isArray(cards) ? cards.map((c) => ({ ...c, history: (c.history || []).slice(-3) })) : cards);
+  json = JSON.stringify({ ...state, card_list: trim(state.card_list), result: state.result && { ...state.result, cards: trim(state.result.cards) } });
+  return json.length <= TUNE_MAX ? json : JSON.stringify({ status: state.status, model: state.model, message: state.message, updated_at: state.updated_at });
+}
 
 function newPairingCode() {
   for (let i = 0; i < 10; i++) {
@@ -96,7 +106,7 @@ router.get('/status', (req, res) => {
     const msg = "Rig yeniden başladığı için otomatik OC yarıda kaldı. Tekrar başlatabilirsiniz.";
     run('UPDATE commands SET status = ?, exit_code = 1, result = ?, finished_at = ? WHERE id = ?', 'failed', msg, now(), orphan.id);
     const prev = rigsSvc.parseJson(rig.tune_state, {}) || {};
-    run('UPDATE rigs SET tune_state = ? WHERE id = ?', JSON.stringify({ ...prev, status: 'failed', message: msg, updated_at: now() }).slice(0, 4000), rig.id);
+    run('UPDATE rigs SET tune_state = ? WHERE id = ?', tuneJson({ ...prev, status: 'failed', message: msg, updated_at: now() }), rig.id);
   }
   res.json({
     paired: !!rig.owner_id,
@@ -167,7 +177,7 @@ router.post('/stats', requirePaired, (req, res) => {
   if (tune && typeof tune === 'object') {
     const prev = rigsSvc.parseJson(req.rig.tune_state, {}) || {};
     const json = JSON.stringify({ ...tune, result_profile_id: prev.result_profile_id, updated_at: now() });
-    if (json.length <= 16000) run('UPDATE rigs SET tune_state = ? WHERE id = ?', json, req.rig.id); // aşırı büyükse yok say
+    if (json.length <= TUNE_MAX) run('UPDATE rigs SET tune_state = ? WHERE id = ?', json, req.rig.id); // aşırı büyükse yok say
   }
   res.json({ ok: true, hardware_required: unknownGpus > 0, ...syncHints(req.rig) });
 });
@@ -199,17 +209,17 @@ router.post('/commands/:id/result', requirePaired, (req, res) => {
   let output = str(b.output, cmd.type === 'console' ? 12000 : 4000); // nvidia-smi gibi çıktılar uzun olabilir
   if (cmd.type === 'oc_tune' && status === 'done') {
     // Agent sonucu JSON olarak verir: önerilen değerler yeni bir OC profili olarak kaydedilir (atama kullanıcıya kalır)
-    const r = rigsSvc.parseJson(String(b.output || '').slice(0, 32000), null); // kart kart sonuç 4000 karakteri aşabilir
+    const r = rigsSvc.parseJson(String(b.output || '').slice(0, TUNE_MAX), null); // kart kart sonuç 4000 karakteri aşabilir
     // Kart başına sonuç (cards) kartlara uygulanmak üzere saklanır; eski tek-profil biçimi profil olarak kaydedilir
     const ok = !!(r && Array.isArray(r.cards) && r.cards.length);
     const profileId = !ok && r && req.rig.owner_id ? rigsSvc.saveTunedProfile(req.rig.owner_id, r) : null;
     const prev = rigsSvc.parseJson(req.rig.tune_state, {}) || {};
     run('UPDATE rigs SET tune_state = ? WHERE id = ?',
-      JSON.stringify({ ...prev, status: ok || profileId ? 'done' : 'failed', result: r, result_profile_id: profileId, updated_at: now() }).slice(0, 16000), req.rig.id);
+      tuneJson({ ...prev, status: ok || profileId ? 'done' : 'failed', result: r, result_profile_id: profileId, updated_at: now() }), req.rig.id);
     if (r && r.summary) output = str(r.summary, 4000);
   } else if (cmd.type === 'oc_tune') {
     const prev = rigsSvc.parseJson(req.rig.tune_state, {}) || {};
-    run('UPDATE rigs SET tune_state = ? WHERE id = ?', JSON.stringify({ ...prev, status: 'failed', message: output, updated_at: now() }).slice(0, 4000), req.rig.id);
+    run('UPDATE rigs SET tune_state = ? WHERE id = ?', tuneJson({ ...prev, status: 'failed', message: output, updated_at: now() }), req.rig.id);
   }
   run('UPDATE commands SET status = ?, exit_code = ?, result = ?, finished_at = ? WHERE id = ?',
     status, Number.isInteger(b.exit_code) ? b.exit_code : null, output, now(), cmd.id);

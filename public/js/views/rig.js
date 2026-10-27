@@ -119,6 +119,20 @@ export async function rigView(el, [rigId]) {
   const fmtParams = (p) => Object.entries(p || {}).map(([k, v]) => `${OC_LABELS[k] || k} ${v}`).join(' · ') || 'stok';
   const pct = (a, b) => (a && b ? ` (%${((a / b - 1) * 100).toFixed(1)})` : '');
 
+  // Kart kart denenen değerler: ne denendi, hashrate/güç ne oldu, kararlı mıydı
+  function historyTable(cards) {
+    const rows = (cards || []).flatMap((c) => (c.history || []).map((h, i) => ({ ...h, idx: c.idx, n: i + 1 })));
+    if (!rows.length) return '';
+    return html`<details style="margin-top:10px" open><summary class="small" style="cursor:pointer">Denenen değerler (${rows.length})</summary>
+      <div class="table-wrap" style="margin-top:6px"><table class="num">
+        <thead><tr><th>GPU</th><th>Aşama</th><th>Değerler</th><th class="r">Hashrate</th><th class="r hide-sm">Güç</th><th class="r hide-sm">Verim</th><th>Sonuç</th></tr></thead>
+        <tbody>${rows.map((h) => html`<tr><td>${h.idx}</td><td class="small">${PHASES[h.phase] || h.phase}</td><td class="mono small">${fmtParams(h.params)}</td>
+          <td class="r">${fmtHash(h.hash)}</td><td class="r hide-sm">${fmtPower(h.power)}</td>
+          <td class="r hide-sm small">${h.hash && h.power ? `${(h.hash / 1e6 / h.power * 1000).toFixed(0)} kH/W` : '—'}</td>
+          <td>${h.ok ? html`<span class="badge ok">Kararlı</span>` : html`<span class="badge bad" title="${h.why || ''}">${h.why || 'Kararsız'}</span>`}</td></tr>`)}</tbody>
+      </table></div></details>`;
+  }
+
   function renderTune() {
     const r = data.rig;
     const t = r.tune;
@@ -134,22 +148,36 @@ export async function rigView(el, [rigId]) {
       return;
     }
     if (t.status === 'queued' || t.status === 'running') {
+      const stale = t.status === 'running' && (!r.online || Date.now() / 1000 - (t.updated_at || 0) > 90);
+      const el2 = t.step_elapsed ?? null;
+      const settling = el2 !== null && el2 < (t.settle_sec || 0);
+      const mmss = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
       box.innerHTML = String(html`
         <div class="card-head"><h2>Otomatik OC sürüyor · ${t.model}</h2><button class="btn sm danger" data-tune-cancel>${icon('stop')}İptal</button></div>
         <div class="card-pad">
           ${t.status === 'queued' ? html`<p class="muted" style="margin:0">Komut rig'e gönderiliyor…</p>` : html`
+          ${stale ? html`<div class="callout warn" style="margin-bottom:10px">Rig'den ${r.online ? '90 sn\'dir' : 'şu an'} haber yok. Rig yeniden başladıysa otomatik OC yarıda kalmıştır; rig bağlanınca durum güncellenir.</div>` : ''}
+          ${el2 !== null ? html`<div style="margin-bottom:10px">
+            <div class="small" style="display:flex;justify-content:space-between"><span>Adım ${t.step + 1} · ${settling ? 'değerler oturuyor (ölçüm sayılmaz)' : 'ölçülüyor'}</span>
+              <span class="dim">${mmss(el2)} / ${mmss(t.step_sec)}</span></div>
+            <div style="height:6px;border-radius:3px;background:var(--border);overflow:hidden;margin-top:4px">
+              <div style="height:100%;width:${Math.min(100, Math.round((el2 / (t.step_sec || 1)) * 100))}%;background:var(--accent)"></div></div></div>` : ''}
           <dl class="kv" style="max-width:560px">
-            <dt>Adım</dt><dd>${t.step}${t.mode === 'isolate' ? html` · <span class="t-warn">miner çöktü, sorumlu kart aranıyor (GPU ${(t.isolating || []).join(', ')})</span>` : ''}</dd>
-            <dt>Toplam hashrate</dt><dd>${fmtHash(t.baseline_hash)} → ${fmtHash(t.best_hash)}${pct(t.best_hash, t.baseline_hash)}</dd>
-            <dt>Toplam güç</dt><dd>${fmtPower(t.baseline_power)} → ${fmtPower(t.best_power)}</dd>
+            ${t.mode === 'isolate' ? html`<dt>Durum</dt><dd><span class="t-warn">miner çöktü, sorumlu kart aranıyor (GPU ${(t.isolating || []).join(', ')})</span></dd>` : ''}
+            <dt>Toplam hashrate</dt><dd>${t.baseline_hash ? html`${fmtHash(t.baseline_hash)} → ${fmtHash(t.best_hash)}${pct(t.best_hash, t.baseline_hash)}` : 'ilk ölçüm bekleniyor'}</dd>
+            <dt>Toplam güç</dt><dd>${t.baseline_power ? html`${fmtPower(t.baseline_power)} → ${fmtPower(t.best_power)}` : '—'}</dd>
             <dt>Kalan (tahmini)</dt><dd>${t.eta_sec ? `~${Math.ceil(t.eta_sec / 60)} dk` : '—'}</dd>
           </dl>
           ${(t.card_list || []).length ? html`<div class="table-wrap" style="margin-top:10px"><table class="num">
-            <thead><tr><th>GPU</th><th>Aşama</th><th>Denenen</th><th class="hide-sm">En iyi (kararlı)</th><th class="r">Hashrate</th></tr></thead>
+            <thead><tr><th>GPU</th><th>Aşama</th><th>Şu an denenen</th><th class="r">Şu anki ölçüm</th><th class="r hide-sm">En iyi kararlı</th></tr></thead>
             <tbody>${t.card_list.map((c) => html`<tr><td>${c.idx}</td><td>${c.done ? html`<span class="badge ok">Bitti</span>` : PHASES[c.phase] || c.phase}</td>
-              <td class="mono small">${fmtParams(c.current)}</td><td class="mono small hide-sm">${fmtParams(c.good)}</td><td class="r">${fmtHash(c.hash)}</td></tr>`)}</tbody>
-          </table></div>` : ''}`}
-          <p class="small dim" style="margin:10px 0 0">Bu sırada hashrate dalgalanabilir. Kararsızlık görülürse otomatik olarak son sağlam değere dönülür.</p>
+              <td class="mono small">${fmtParams(c.current)}</td>
+              <td class="r">${c.live ? html`${fmtHash(c.live.hash)}<div class="small dim">${fmtPower(c.live.power)}</div>` : html`<span class="dim small">${settling ? 'bekleniyor' : '—'}</span>`}</td>
+              <td class="r hide-sm">${c.hash ? html`${fmtHash(c.hash)}<div class="small dim mono">${fmtParams(c.good)}</div>` : '—'}</td></tr>`)}</tbody>
+          </table></div>
+          ${historyTable(t.card_list)}` : ''}`}
+          <p class="small dim" style="margin:10px 0 0">Her adım ${t.step_sec ? Math.round(t.step_sec / 60) : 3} dk sürer. Bu sırada rig'i ya da miner'ı yeniden başlatmayın; başlatırsanız deneme yarıda kalır.
+            Kararsızlık görülürse kart kendiliğinden son sağlam değere döner.</p>
         </div>`);
       return;
     }
@@ -168,6 +196,7 @@ export async function rigView(el, [rigId]) {
               <td class="r">${c.before ? html`${fmtHash(c.before.hash)} → ${fmtHash(c.after.hash)}` : '—'}</td>
               <td class="r">${c.before ? html`${fmtPower(c.before.power)} → ${fmtPower(c.after.power)}` : '—'}</td></tr>`)}</tbody>
           </table></div>
+          ${historyTable(res.cards)}
           <p class="small muted" style="margin:10px 0">Her kart kendi değerini aldı. Uygulayana kadar kartlar eski ayarlarıyla çalışır.</p>
           <div class="btn-row"><button class="btn primary" data-tune-apply-cards>${icon('apply')}Her karta kendi değerini uygula</button></div>
         </div>`);
@@ -191,7 +220,7 @@ export async function rigView(el, [rigId]) {
     }
     box.innerHTML = String(html`
       <div class="card-head"><h2>Otomatik OC tamamlanamadı${t.model ? ` · ${t.model}` : ''}</h2><button class="btn sm ghost" data-tune-dismiss>Kapat</button></div>
-      <div class="card-pad"><div class="callout warn">${t.message || 'Bilinmeyen bir sorun oluştu.'}</div></div>`);
+      <div class="card-pad"><div class="callout warn">${t.message || 'Bilinmeyen bir sorun oluştu.'}</div>${historyTable(t.card_list)}</div>`);
   }
 
   function renderSide() {
@@ -261,7 +290,9 @@ export async function rigView(el, [rigId]) {
   }
 
   async function sendCommand(type) {
-    const c = COMMAND_CONFIRM[type];
+    const tuning = data.rig.tune?.status === 'running' && ['reboot', 'miner_restart', 'miner_stop'].includes(type);
+    const c = tuning ? ['Otomatik OC yarıda kalacak', `Otomatik OC şu an çalışıyor. "${COMMAND_LABELS[type]}" derseniz deneme yarıda kalır ve baştan başlatmanız gerekir. Yine de devam edilsin mi?`]
+      : COMMAND_CONFIRM[type];
     if (c && !(await confirmDialog(c[0], c[1], 'Evet'))) return;
     try {
       await api(`rigs/${rigId}/commands`, { method: 'POST', body: { type } });
@@ -480,7 +511,7 @@ export async function rigView(el, [rigId]) {
           term.textContent += `${term.textContent ? '\n' : ''}${text}`;
           term.scrollTop = term.scrollHeight;
         };
-        const HELP = ['miner start · miner stop · miner restart · miner log', 'oc (OC değerlerini tekrar uygula) · sreboot (rig\'i yeniden başlat)',
+        const HELP = ['miner start · miner stop · miner restart · miner log · miner api (miner\'ın ham verisi)', 'oc (OC değerlerini tekrar uygula) · sreboot (rig\'i yeniden başlat)',
           'nvidia-smi · clinfo (AMD OpenCL) · lspci (kartlar) · dmesg (sistem hataları)',
           'uptime · free · df · ip · ping · log (agent kaydı) · bilgi · guncelle'].join('\n');
         let busy = false;

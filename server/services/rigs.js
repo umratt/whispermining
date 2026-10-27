@@ -67,7 +67,11 @@ function bumpConfigForOcProfile(ocId) {
        WHERE id IN (SELECT rig_id FROM rig_oc WHERE oc_profile_id = ?) OR id IN (SELECT rig_id FROM gpus WHERE oc_profile_id = ?)`, ocId, ocId);
 }
 
-const sanitizeWorker = (s) => String(s).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32) || 'rig';
+// Havuzlar worker adında sadece İngilizce harf kabul eder: Türkçe harfler silinmesin, karşılığına çevrilsin (Dükkan → Dukkan)
+const TR_ASCII = { ç: 'c', Ç: 'C', ğ: 'g', Ğ: 'G', ı: 'i', İ: 'I', ö: 'o', Ö: 'O', ş: 's', Ş: 'S', ü: 'u', Ü: 'U', ' ': '_' };
+const sanitizeWorker = (s) => String(s).replace(/[çÇğĞıİöÖşŞüÜ ]/g, (ch) => TR_ASCII[ch])
+  .normalize('NFD').replace(/[̀-ͯ]/g, '')
+  .replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32) || 'rig';
 
 function flightSheetMiners(fsId) {
   return all(`SELECT fm.gpu_vendor, fm.extra_args, mv.id AS miner_version_id, mv.version, mv.download_url, mv.sha256,

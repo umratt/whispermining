@@ -343,9 +343,18 @@ class Tuner:
             return None
         return {"hash": sum(v["hash"] for v in vals), "power": sum(v["power"] for v in vals)}
 
+    def _live(self, bus):
+        """Bu adımda şimdiye kadarki ortalama (panelde ölçüm sürerken gösterilir)."""
+        rs = [s["rows"][bus] for s in self.samples if s and bus in s["rows"]]
+        if not rs:
+            return None
+        return {"hash": round(sum(r.get("hashrate") or 0 for r in rs) / len(rs)),
+                "power": round(sum(r.get("power") or 0 for r in rs) / len(rs), 1), "n": len(rs)}
+
     def status(self):
         remaining = max((len(c.phases) - c.phase_i for c in self.cards.values()), default=0)
-        eta = max(0, int((remaining * 3 + len(self.isolate_queue)) * self.step_sec - (time.monotonic() - self.step_started)))
+        elapsed = max(0, int(time.monotonic() - self.step_started))
+        eta = max(0, int((remaining * 3 + len(self.isolate_queue)) * self.step_sec - elapsed))
         before, best = self._totals("baseline"), self._totals("best")
         return {
             "status": "running" if not self.finished else ("failed" if self.failed else "done"),
@@ -354,14 +363,17 @@ class Tuner:
             "baseline_hash": round(before["hash"]) if before else None, "baseline_power": round(before["power"], 1) if before else None,
             "best_hash": round(best["hash"]) if best else None, "best_power": round(best["power"], 1) if best else None,
             "eta_sec": eta, "message": self.failed,
+            "step_elapsed": min(elapsed, self.step_sec), "step_sec": self.step_sec, "settle_sec": self.settle,
             "card_list": [{"bus_id": c.bus, "idx": c.idx, "phase": c.phase(), "current": c.current, "good": c.good,
-                           "hash": round(c.best["hash"]) if c.best else None, "done": c.done} for c in self.cards.values()],
+                           "hash": round(c.best["hash"]) if c.best else None, "done": c.done,
+                           "live": self._live(c.bus), "history": c.history[-8:]} for c in self.cards.values()],
         }
 
     def result(self):
         cards = []
         for c in self.cards.values():
-            item = {"bus_id": c.bus, "idx": c.idx, "params": c.good, "start_was_unstable": c.fell_back, "failed": c.failed}
+            item = {"bus_id": c.bus, "idx": c.idx, "params": c.good, "start_was_unstable": c.fell_back, "failed": c.failed,
+                    "history": c.history}
             if c.baseline and c.best:
                 item["before"] = {"hash": round(c.baseline["hash"]), "power": round(c.baseline["power"], 1)}
                 item["after"] = {"hash": round(c.best["hash"]), "power": round(c.best["power"], 1)}

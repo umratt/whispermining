@@ -349,15 +349,27 @@ class BzMiner(Spec):
             a += ["--nvidia", "0"]
         return a + self.extra(miner)
 
+    api_paths = ("/hive_status", "/status", "/api/snapshot")
+
     def stats(self, gpus):
-        for path in ("/hive_status", "/api/snapshot", "/status"):
+        # Hashrate için ilk cevap veren yol; share sayıları bazı sürümlerde sadece /status'ta (valid_solutions) dolu
+        found = []
+        for path in self.api_paths:
             try:
                 r = generic_devices(_http_json(self.port, path), gpus)
-                if r:
-                    return r
             except Exception:
                 continue
-        return {}
+            if r:
+                found.append(r)
+        if not found:
+            return {}
+        base = found[0]
+        for other in found[1:]:
+            for bus, v in base.items():
+                o = other.get(bus) or {}
+                if not v.get("accepted") and o.get("accepted"):
+                    v["accepted"], v["rejected"] = o["accepted"], o.get("rejected")
+        return base
 
 
 SPECS = {s.api_type: s for s in (TRex(), LolMiner(), TeamRedMiner(), GMiner(), SRBMiner(), Rigel(), BzMiner())}

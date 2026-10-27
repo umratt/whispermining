@@ -268,6 +268,16 @@ class Agent:
             return "done", 0, "\n".join(lines) or "Miner çalışmıyor"
         if cmd == "log":
             return "done", 0, "\n".join(tail_lines(os.path.join(config.RUN_DIR, "agent.log"), 60))
+        if cmd == "miner api":  # miner'ın ham verisi: hashrate/share okunamıyorsa sebebi buradan görülür
+            from .miners.specs import _http_json
+            parts = []
+            for spec, proc, _g in self.miners:
+                for path in getattr(spec, "api_paths", ("/",)):
+                    try:
+                        parts.append(f"── {spec.name} {path} ──\n{json.dumps(_http_json(spec.port, path), ensure_ascii=False)[:4000]}")
+                    except Exception as e:
+                        parts.append(f"── {spec.name} {path} ── okunamadı: {e}")
+            return "done", 0, "\n".join(parts) or "Miner çalışmıyor"
         if cmd == "bilgi":
             return "done", 0, (f"Rig: {self.view.get('rig_name')}\nRig ID: {self.api.rig_id}\nPanel: {self.server}\n"
                                f"Agent: {VERSION}\nKartlar: {', '.join(g['model'] for g in self.gpus) or 'yok'}")
