@@ -198,6 +198,7 @@ const ICONS = {
   apply: '<path d="M20 6 9 17l-5-5"/>',
   usb: '<rect x="7" y="2" width="10" height="8" rx="1"/><path d="M5 10h14v6a6 6 0 0 1-6 6h-2a6 6 0 0 1-6-6z"/><path d="M10 5h.01M14 5h.01"/>',
   download: '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>',
+  profit: '<path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/>',
   copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/>',
 };
 export const icon = (name) => raw(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`);

@@ -7,6 +7,7 @@ const sec = require('../security');
 const rigsSvc = require('../services/rigs');
 const vault = require('../services/confvault');
 const telegram = require('../services/telegram');
+const profit = require('../services/profit');
 const { COMMAND_TYPES, CONSOLE_COMMANDS } = require('./agent');
 
 const router = express.Router();
@@ -168,6 +169,18 @@ router.get('/rigs/:id/rig-conf-text', (req, res) => {
   if (!secret) return bad(res, "Bu rig için kayıtlı rig.conf yok. \"rig.conf'u yeniden oluştur\" ile yenisini alın.", 404);
   res.set('Cache-Control', 'no-store');
   res.json(confResponse(r, secret));
+});
+
+// ---- Kazanç sıralaması: rig'lerdeki her kart modeli için tüm coin'lerin günlük kazancı ----
+router.get('/profit', async (req, res) => {
+  const models = all(`SELECT g.model, COUNT(*) AS count FROM gpus g JOIN rigs r ON r.id = g.rig_id
+                      WHERE r.owner_id = ? AND g.present = 1 GROUP BY g.model ORDER BY count DESC`, req.user.id);
+  try {
+    res.json(await profit.ranking(models));
+  } catch (err) {
+    console.error('[profit]', err.message);
+    bad(res, 'Kazanç verisi şu an alınamadı (WhatToMine ya da kur servisine ulaşılamadı). Birkaç dakika sonra tekrar deneyin.', 502);
+  }
 });
 
 // ---- Rig ekranını izleme ----

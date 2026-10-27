@@ -7,12 +7,14 @@ import { minersView } from './views/miners.js';
 import { alertsView } from './views/alerts.js';
 import { settingsView } from './views/settings.js';
 import { setupView } from './views/setup.js';
+import { profitView } from './views/profit.js';
 
 const NAV = [
   { path: 'rigs', label: "Rig'ler", short: "Rig'ler", icon: 'rigs' },
   { path: 'flight-sheets', label: 'Flight sheet', short: 'Flight', icon: 'flight' },
   { path: 'overclock', label: 'Overclock', short: 'OC', icon: 'oc' },
-  { path: 'miners', label: 'Miner kataloğu', short: 'Miner', icon: 'miners' },
+  { path: 'profit', label: 'Kazanç sıralaması', short: 'Kazanç', icon: 'profit' },
+  { path: 'miners', label: 'Miner kataloğu', short: 'Miner', icon: 'miners', desktopOnly: true },
   { path: 'alerts', label: 'Uyarılar', short: 'Uyarı', icon: 'alerts' },
   { path: 'setup', label: 'Flash kurulumu', short: 'Kurulum', icon: 'usb', desktopOnly: true },
   { path: 'settings', label: 'Ayarlar', short: 'Ayarlar', icon: 'settings', desktopOnly: true },
@@ -24,6 +26,7 @@ const ROUTES = [
   [/^flight-sheets$/, flightView],
   [/^overclock$/, ocView],
   [/^miners$/, minersView],
+  [/^profit$/, profitView],
   [/^alerts$/, alertsView],
   [/^settings$/, settingsView],
   [/^setup$/, setupView],
